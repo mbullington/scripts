@@ -1,5 +1,5 @@
 [package]
-name = "scripts-monorepo"
+name = "scripts_runner"
 version = "0.1.0"
 edition = "2021"
 description = "Pragmatic monorepo task runner with dependency graphs and content-aware caching."

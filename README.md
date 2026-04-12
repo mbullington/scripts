@@ -15,7 +15,7 @@ Repository docs also include scdoc man page sources for *scripts*(1) and
 ## Installation
 
 ```sh
-cargo install scripts-monorepo
+cargo install scripts_runner
 ```
 
 This installs the `scripts` binary.

@@ -728,7 +728,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "scripts-monorepo"
+name = "scripts_runner"
 version = "0.1.0"
 dependencies = [
  "anyhow",
