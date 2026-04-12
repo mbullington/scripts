@@ -1,0 +1,10 @@
+[man]
+command = """
+mkdir -p target/man
+scdoc < docs/man/scripts.1.scd > target/man/scripts.1
+scdoc < docs/man/SCRIPTS.5.scd > target/man/SCRIPTS.5
+"""
+watch = ["docs/man/**"]
+
+[clean-man]
+command = "rm -rf target/man"

@@ -1,0 +1,9 @@
+[build]
+deps = ["b:build"]
+command = "echo building a"
+watch = ["file.txt"]
+
+[test]
+deps = [":build"]
+command = "echo testing a"
+watch = ["file.txt"]
