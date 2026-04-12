@@ -8,9 +8,9 @@ scripts - pragmatic monorepo task runner with content-aware caching
 
 ```
 scripts
-scripts run [--force] [--quiet | --verbose] [target] [-- args...]
-scripts env [target]
-scripts print-tree [--json] [--flat] [target]
+scripts run [--force] [--quiet | --verbose] target [-- args...]
+scripts env target
+scripts print-tree [--json] [--flat] target
 scripts clean [path]
 scripts completions shell
 ```
@@ -36,7 +36,7 @@ from the nearest enclosing unit, if one can be found.
 Run a task and its dependencies.
 
 ```
-scripts run [--force] [--quiet | --verbose] [target] [-- args...]
+scripts run [--force] [--quiet | --verbose] target [-- args...]
 ```
 
 If arguments are provided after *--*, they are appended to the root task's
@@ -55,7 +55,7 @@ The shell inherits any *bin* paths declared by the target unit and its
 dependencies.
 
 ```
-scripts env [target]
+scripts env target
 ```
 
 The current working directory is not changed.
@@ -65,7 +65,7 @@ The current working directory is not changed.
 Print a task's dependency graph.
 
 ```
-scripts print-tree [--json] [--flat] [target]
+scripts print-tree [--json] [--flat] target
 ```
 
 Use *--json* for structured output or *--flat* for a deduplicated list.
@@ -97,26 +97,20 @@ Supported shells include *bash*, *elvish*, *fish*, *powershell*, and *zsh*.
 
 # TARGETS
 
-Targets use the form <unit>:<task>.
+Use one of these forms:
+
+- *<unit>:<task>* for a task in another unit
+- *<task>* for a task in the current unit
+- *:<task>* also for a task in the current unit
 
 The unit portion names a directory containing a *SCRIPTS*(5) file. The task
 portion names one top-level task table in that file.
 
-If _task_ is omitted in dependency declarations, *build* is assumed.
-
-When the CLI target omits the colon entirely, *scripts* applies a convenience
-rule:
-
-- if the argument looks like a path or names a directory containing *SCRIPTS*,
-  it is treated as a unit and the task defaults to *build*
-- otherwise, it is treated as a task name in the current unit
-
 Examples:
 
 - *app:build*
+- *test*
 - *:test*
-- *tools/pkg* meaning *tools/pkg:build*
-- *build* meaning *.:build* when run from inside a unit
 
 # CACHING
 
@@ -185,7 +179,7 @@ scripts tree app:build --flat
 Open a shell with dependency-provided binaries on *PATH*:
 
 ```
-scripts env :dev
+scripts env dev
 ```
 
 Generate a Bash completion script:

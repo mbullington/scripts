@@ -80,7 +80,7 @@ watch = ["file.txt"]
 }
 
 #[test]
-fn lazy_task_syntax_prefers_local_task_over_existing_non_unit_directory() {
+fn plain_task_name_targets_the_current_unit() {
     let repo = init_repo();
 
     write_file(
@@ -92,7 +92,6 @@ command = "printf 'root-build\n'"
 watch = []
 "#,
     );
-    fs::create_dir_all(repo.path().join("build")).expect("create non-unit build dir");
 
     scripts_command(&repo)
         .args(["run", "build"])
@@ -251,6 +250,27 @@ fn completions_command_generates_shell_script() {
                 .and(predicate::str::contains("print-tree"))
                 .and(predicate::str::contains("completions")),
         );
+}
+
+#[test]
+fn path_like_dependency_targets_require_explicit_task_names() {
+    let repo = init_repo();
+
+    write_file(
+        repo.path(),
+        "app/SCRIPTS",
+        r#"
+[build]
+deps = ["tools/pkg"]
+watch = []
+"#,
+    );
+
+    scripts_command(&repo)
+        .args(["print-tree", "app:build"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid dependency 'tools/pkg'"));
 }
 
 #[test]

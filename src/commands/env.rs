@@ -9,7 +9,7 @@ use crate::helpers::{
 };
 
 pub fn cmd_env_command(target: &str) -> Result<()> {
-    let (unit, task_name) = parse_target(target);
+    let (unit, task_name) = parse_target(target)?;
     let unit_path = Path::new(&unit);
 
     let graph: TaskGraph = build_task_graph(unit_path, &task_name)?;

@@ -12,11 +12,11 @@ use crate::helpers::{git::get_git_root, resolve::read_scripts};
 mod commands;
 mod helpers;
 
-const ROOT_AFTER_HELP: &str = "Examples:\n  scripts run app:build\n  scripts run build\n  scripts print-tree app:test --json\n  scripts env :dev\n  scripts completions bash > ~/.local/share/bash-completion/completions/scripts\n\nTarget syntax:\n  <unit>:<task>   Run a specific task in a unit\n  :<task>         Run a task in the current unit\n  <unit>          Shorthand for <unit>:build\n  <task>          Shorthand for .:<task> when run inside a unit";
+const ROOT_AFTER_HELP: &str = "Examples:\n  scripts run app:build\n  scripts run build\n  scripts print-tree app:test --json\n  scripts env dev\n  scripts completions bash > ~/.local/share/bash-completion/completions/scripts\n\nTarget syntax:\n  <unit>:<task>   Run a specific task in another unit\n  <task>          Run a task in the current unit\n  :<task>         Also run a task in the current unit";
 
-const RUN_AFTER_HELP: &str = "Examples:\n  scripts run app:build\n  scripts run build\n  scripts run :dev -- echo done\n  scripts run --force tools/pkg:build\n  scripts run --quiet app:build\n  scripts run --verbose app:build";
+const RUN_AFTER_HELP: &str = "Examples:\n  scripts run app:build\n  scripts run build\n  scripts run dev -- echo done\n  scripts run --force tools/pkg:build\n  scripts run --quiet app:build\n  scripts run --verbose app:build";
 
-const ENV_AFTER_HELP: &str = "Examples:\n  scripts env app:dev\n  scripts env :dev";
+const ENV_AFTER_HELP: &str = "Examples:\n  scripts env app:dev\n  scripts env dev";
 
 const PRINT_TREE_AFTER_HELP: &str = "Examples:\n  scripts print-tree app:build\n  scripts tree app:build --flat\n  scripts print-tree app:test --json";
 
@@ -47,8 +47,8 @@ enum Cli {
 #[command(about = "Run a task and its dependencies.")]
 #[command(after_help = RUN_AFTER_HELP)]
 struct RunArgs {
-    #[arg(default_value = ".", value_name = "TARGET")]
-    /// Task target. Use <unit>:<task>, :<task>, <unit>, or <task>.
+    #[arg(value_name = "TARGET")]
+    /// Task target. Use <unit>:<task> for another unit or <task> for the current unit.
     target: String,
     /// Ignore cached results and run even if inputs are unchanged.
     #[arg(long)]
@@ -77,8 +77,8 @@ struct CleanArgs {
 #[command(about = "Start a shell with PATH prepared for a task.")]
 #[command(after_help = ENV_AFTER_HELP)]
 struct EnvArgs {
-    #[arg(default_value = ".", value_name = "TARGET")]
-    /// Task target. PATH is built from the target unit and its dependencies.
+    #[arg(value_name = "TARGET")]
+    /// Task target. Use <unit>:<task> for another unit or <task> for the current unit.
     target: String,
 }
 
@@ -86,8 +86,8 @@ struct EnvArgs {
 #[command(about = "Print a task's dependency graph.")]
 #[command(after_help = PRINT_TREE_AFTER_HELP)]
 struct PrintTreeArgs {
-    #[arg(default_value = ".", value_name = "TARGET")]
-    /// Task target. Use <unit>:<task>, :<task>, <unit>, or <task>.
+    #[arg(value_name = "TARGET")]
+    /// Task target. Use <unit>:<task> for another unit or <task> for the current unit.
     target: String,
     /// Emit JSON instead of human-readable text.
     #[arg(long)]
@@ -161,7 +161,7 @@ fn maybe_print_tasks_for_current_unit() {
                 for key in keys {
                     println!("  :{key}");
                 }
-                println!("\nTip: run `scripts run :<task>` from this unit.");
+                println!("\nTip: run `scripts run <task>` from this unit.");
             }
             break;
         }

@@ -63,7 +63,7 @@ fn get_flat(
 }
 
 pub fn cmd_print_tree_command(target: &str, json: bool, flat: bool) -> Result<()> {
-    let (unit, task) = parse_target(target);
+    let (unit, task) = parse_target(target)?;
     let unit_path = Path::new(&unit);
     let git_root = get_git_root(unit_path)?;
     let graph: TaskGraph = build_task_graph(unit_path, &task)?;

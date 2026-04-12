@@ -3,6 +3,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use anyhow::{bail, Result as AnyhowResult};
+
 use crate::helpers::scripts_def::ScriptsDef;
 
 use super::git::{get_git_root, GitError};
@@ -13,6 +15,7 @@ pub enum ResolveScriptsError {
     DoesNotExist(&'static str),
     /// DoesNotExist with a dynamic message (e.g., includes task name)
     DoesNotExistMsg(String),
+    InvalidTarget(String),
     DependencyCycle(Vec<String>),
     Toml(toml::de::Error),
     IO(std::io::Error),
@@ -79,14 +82,21 @@ pub fn read_scripts(path: &Path) -> Result<ScriptsDef, ResolveScriptsError> {
     }
 }
 
-/// Split a `<unit>:<task>` string into the unit path and task name.
-pub fn parse_target(target: &str) -> (String, String) {
+/// Split a task target into the unit path and task name.
+pub fn parse_target(target: &str) -> AnyhowResult<(String, String)> {
     if let Some(pos) = target.rfind(':') {
         let (path, task) = target.split_at(pos);
-        return (
+        let task = &task[1..];
+        if task.is_empty() {
+            bail!(
+                "invalid target '{target}'. Missing task name after ':'. Use 'build' for the current unit or '<unit>:build' for another unit"
+            );
+        }
+
+        return Ok((
             if path.is_empty() { "." } else { path }.to_string(),
-            task[1..].to_string(),
-        );
+            task.to_string(),
+        ));
     }
 
     let looks_like_path = target.contains('/')
@@ -95,11 +105,13 @@ pub fn parse_target(target: &str) -> (String, String) {
         || target.starts_with("./")
         || target.starts_with("../");
 
-    if looks_like_path || Path::new(target).join("SCRIPTS").is_file() {
-        return (target.to_string(), "build".to_string());
+    if looks_like_path {
+        bail!(
+            "invalid target '{target}'. Use '<unit>:<task>' for another unit or '<task>' for the current unit"
+        );
     }
 
-    (".".to_string(), target.to_string())
+    Ok((".".to_string(), target.to_string()))
 }
 
 #[cfg(test)]
@@ -109,23 +121,20 @@ mod tests {
     #[test]
     fn parse_target_handles_explicit_unit_and_task() {
         assert_eq!(
-            parse_target("tools/pkg:build"),
+            parse_target("tools/pkg:build").unwrap(),
             ("tools/pkg".into(), "build".into())
         );
-        assert_eq!(parse_target(":dev"), (".".into(), "dev".into()));
+        assert_eq!(parse_target(":dev").unwrap(), (".".into(), "dev".into()));
     }
 
     #[test]
-    fn parse_target_treats_plain_name_as_task() {
-        assert_eq!(parse_target("build"), (".".into(), "build".into()));
+    fn parse_target_treats_plain_name_as_current_unit_task() {
+        assert_eq!(parse_target("build").unwrap(), (".".into(), "build".into()));
     }
 
     #[test]
-    fn parse_target_treats_path_like_targets_as_units() {
-        assert_eq!(
-            parse_target("./tools/pkg"),
-            ("./tools/pkg".into(), "build".into())
-        );
-        assert_eq!(parse_target(".."), ("..".into(), "build".into()));
+    fn parse_target_rejects_path_like_targets_without_task_names() {
+        assert!(parse_target("./tools/pkg").is_err());
+        assert!(parse_target("..").is_err());
     }
 }

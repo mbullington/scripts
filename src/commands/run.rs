@@ -289,7 +289,7 @@ pub fn cmd_run_command(
         RunOutputMode::Normal
     };
 
-    let (unit, task_name) = parse_target(target);
+    let (unit, task_name) = parse_target(target)?;
     let unit_path = Path::new(&unit);
     let git_root = get_git_root(unit_path)?;
     let cache_path = git_root.join(".scripts_cache");

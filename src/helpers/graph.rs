@@ -54,6 +54,7 @@ impl Display for TaggedResolveScriptsError {
                 self.path.display()
             ),
             E::DoesNotExistMsg(msg) => write!(f, "{}: {msg}", self.path.display()),
+            E::InvalidTarget(msg) => write!(f, "{}: {msg}", self.path.display()),
             E::DependencyCycle(cycle) => {
                 write!(
                     f,
@@ -74,13 +75,32 @@ impl Display for TaggedResolveScriptsError {
     }
 }
 
-fn parse_dep(dep: &str) -> (String, String) {
+fn parse_dep(dep: &str) -> Result<(String, String), ResolveScriptsError> {
     if let Some(pos) = dep.rfind(':') {
         let (path, task) = dep.split_at(pos);
-        (path.to_string(), task[1..].to_string())
-    } else {
-        (dep.to_string(), "build".to_string())
+        let task = &task[1..];
+        if task.is_empty() {
+            return Err(ResolveScriptsError::InvalidTarget(format!(
+                "invalid dependency '{dep}'. Missing task name after ':'"
+            )));
+        }
+
+        return Ok((path.to_string(), task.to_string()));
     }
+
+    let looks_like_path = dep.contains('/')
+        || dep == "."
+        || dep == ".."
+        || dep.starts_with("./")
+        || dep.starts_with("../");
+
+    if looks_like_path {
+        return Err(ResolveScriptsError::InvalidTarget(format!(
+            "invalid dependency '{dep}'. Use '<unit>:<task>' for another unit or '<task>' for the current unit"
+        )));
+    }
+
+    Ok((String::new(), dep.to_string()))
 }
 
 fn format_task_ref(unit_path: &Path, task_name: &str) -> String {
@@ -142,7 +162,11 @@ pub fn build_task_graph(
             let mut dependencies = Vec::new();
             if let Some(deps) = &task_def.deps {
                 for dep in deps {
-                    let (dep_unit, dep_task) = parse_dep(dep);
+                    let (dep_unit, dep_task) =
+                        parse_dep(dep).map_err(|error| TaggedResolveScriptsError {
+                            path: unit_path.clone(),
+                            error,
+                        })?;
                     let dep_path = if dep_unit.is_empty() {
                         unit_path.clone()
                     } else {

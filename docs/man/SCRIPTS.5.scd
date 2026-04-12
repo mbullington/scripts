@@ -27,13 +27,17 @@ Each top-level table defines one task directly. For example:
 
 Optional array of dependency references.
 
-Each dependency uses the form <unit>:<task>. If the task portion is omitted,
-*build* is assumed.
+Each dependency uses one of these forms:
 
-Special cases:
+- *<unit>:<task>* for another unit
+- *<task>* for the current unit
+- *:<task>* also for the current unit
 
-- *:task* refers to another task in the current unit
-- *relative/path* refers to *relative/path:build*
+Examples:
+
+- *tools/pkg:build*
+- *lint*
+- *:lint*
 
 Dependency units are resolved by searching upward from the depending unit
 toward the git repository root. The first matching directory which contains a

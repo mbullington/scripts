@@ -66,52 +66,50 @@ watch = ["src/**", "tests/**", "Cargo.lock"]
 
 ## Target syntax
 
-`scripts` accepts targets in these forms:
+`scripts` accepts task targets in these forms:
 
-- `<unit>:<task>` — run a specific task in a unit
-- `:<task>` — run a task in the current unit
-- `<unit>` — shorthand for `<unit>:build`
-- `<task>` — shorthand for `.:<task>` when run inside a unit
+- `<unit>:<task>` — run a specific task in another unit
+- `<task>` — run a task in the current unit
+- `:<task>` — also run a task in the current unit
 
 Examples:
 
 - `app:build`
+- `test`
 - `:test`
-- `tools/pkg`
-- `build`
 
 ## Commands
 
-### `scripts run [OPTIONS] [TARGET] [-- ARGS...]`
+### `scripts run [OPTIONS] <TARGET> [-- ARGS...]`
 
 Run a task and its dependencies.
 
 ```sh
 scripts run app:build
 scripts run build
-scripts run :dev -- echo done
+scripts run dev -- echo done
 scripts run --force tools/pkg:build
 scripts run --quiet app:build
 scripts run --verbose app:build
 ```
 
 Notes:
-- when you are already inside a unit, `scripts run build` resolves to `.:build`
+- use `app:build` for another unit, or `build` / `:build` for the current unit
 - anything after `--` is appended to the root task command and becomes part of the cache key
 - `--quiet` suppresses routine task status lines but still streams task output
 - `--verbose` shows the working directory and shell command for each task
 - task status lines are written to stderr so stdout stays usable for task output
 
-### `scripts env [TARGET]`
+### `scripts env <TARGET>`
 
 Start a shell with PATH prepared for a task.
 
 ```sh
 scripts env app:dev
-scripts env :dev
+scripts env dev
 ```
 
-### `scripts print-tree [TARGET]`
+### `scripts print-tree <TARGET>`
 
 Print a task's dependency graph.
 
