@@ -3,6 +3,7 @@ command = """
 mkdir -p target/man
 scdoc < docs/man/scripts.1.scd > target/man/scripts.1
 scdoc < docs/man/SCRIPTS.5.scd > target/man/SCRIPTS.5
+scdoc < docs/man/SCRIPTS_WORKSPACE.toml.5.scd > target/man/SCRIPTS_WORKSPACE.toml.5
 """
 watch = ["docs/man/**"]
 

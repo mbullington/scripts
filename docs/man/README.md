@@ -25,6 +25,7 @@ Or build files directly:
 mkdir -p target/man
 scdoc < docs/man/scripts.1.scd > target/man/scripts.1
 scdoc < docs/man/SCRIPTS.5.scd > target/man/SCRIPTS.5
+scdoc < docs/man/SCRIPTS_WORKSPACE.toml.5.scd > target/man/SCRIPTS_WORKSPACE.toml.5
 ```
 
 ## Preview
@@ -32,4 +33,5 @@ scdoc < docs/man/SCRIPTS.5.scd > target/man/SCRIPTS.5
 ```sh
 man ./target/man/scripts.1
 man ./target/man/SCRIPTS.5
+man ./target/man/SCRIPTS_WORKSPACE.toml.5
 ```

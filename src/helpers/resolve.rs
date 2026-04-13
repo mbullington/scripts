@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::{bail, Result as AnyhowResult};
 
-use crate::helpers::scripts_def::ScriptsDef;
+use crate::helpers::scripts_def::{ScriptsDef, WorkspaceConfig};
 
 use super::git::{get_git_root, GitError};
 
@@ -82,6 +82,15 @@ pub fn read_scripts(path: &Path) -> Result<ScriptsDef, ResolveScriptsError> {
     }
 }
 
+fn looks_like_unit_path(target: &str) -> bool {
+    target.contains('/')
+        || target == "."
+        || target == ".."
+        || target.starts_with("./")
+        || target.starts_with("../")
+        || Path::new(target).exists()
+}
+
 /// Split a task target into the unit path and task name.
 pub fn parse_target(target: &str) -> AnyhowResult<(String, String)> {
     if let Some(pos) = target.rfind(':') {
@@ -99,19 +108,23 @@ pub fn parse_target(target: &str) -> AnyhowResult<(String, String)> {
         ));
     }
 
-    let looks_like_path = target.contains('/')
-        || target == "."
-        || target == ".."
-        || target.starts_with("./")
-        || target.starts_with("../");
-
-    if looks_like_path {
+    if looks_like_unit_path(target) {
         bail!(
-            "invalid target '{target}'. Use '<unit>:<task>' for another unit or '<task>' for the current unit"
+            "invalid target '{target}'. Units must include a task name. Use '<unit>:<task>' for another unit or '<task>' for the current unit"
         );
     }
 
     Ok((".".to_string(), target.to_string()))
+}
+
+pub fn read_workspace_config(git_root: &Path) -> Option<WorkspaceConfig> {
+    let workspace_path = git_root.join("SCRIPTS_WORKSPACE.toml");
+    if !workspace_path.is_file() {
+        return None;
+    }
+
+    let contents = read_to_string(workspace_path).ok()?;
+    toml::from_str(&contents).ok()
 }
 
 #[cfg(test)]

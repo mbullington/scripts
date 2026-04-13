@@ -7,14 +7,14 @@ use clap::{CommandFactory, Parser};
 use clap_complete::{generate, Shell};
 use commands::{cmd_clean_command, cmd_env_command, cmd_print_tree_command, cmd_run_command};
 
-use crate::helpers::{git::get_git_root, resolve::read_scripts};
+use crate::helpers::task_list::print_tasks_for_current_unit;
 
 mod commands;
 mod helpers;
 
-const ROOT_AFTER_HELP: &str = "Examples:\n  scripts run app:build\n  scripts run build\n  scripts print-tree app:test --json\n  scripts env dev\n  scripts completions bash > ~/.local/share/bash-completion/completions/scripts\n\nTarget syntax:\n  <unit>:<task>   Run a specific task in another unit\n  <task>          Run a task in the current unit\n  :<task>         Also run a task in the current unit";
+const ROOT_AFTER_HELP: &str = "Examples:\n  scripts run app:build\n  scripts run build\n  scripts run :dev --watch\n  scripts print-tree app:test --json\n  scripts env dev\n  scripts completions bash > ~/.local/share/bash-completion/completions/scripts\n\nTarget syntax:\n  <unit>:<task>   Run a specific task in another unit\n  <task>          Run a task in the current unit\n  :<task>         Also run a task in the current unit";
 
-const RUN_AFTER_HELP: &str = "Examples:\n  scripts run app:build\n  scripts run build\n  scripts run dev -- echo done\n  scripts run --force tools/pkg:build\n  scripts run --quiet app:build\n  scripts run --verbose app:build";
+const RUN_AFTER_HELP: &str = "Examples:\n  scripts run app:build\n  scripts run build\n  scripts run :dev --watch\n  scripts run dev -- echo done\n  scripts run --force tools/pkg:build\n  scripts run --quiet app:build\n  scripts run --verbose app:build";
 
 const ENV_AFTER_HELP: &str = "Examples:\n  scripts env app:dev\n  scripts env dev";
 
@@ -59,6 +59,9 @@ struct RunArgs {
     /// Show task status lines plus the working directory and shell command.
     #[arg(short, long, conflicts_with = "quiet")]
     verbose: bool,
+    /// Watch for changes and re-run the target graph.
+    #[arg(long)]
+    watch: bool,
     /// Append an inline shell fragment to the root task after `--`.
     #[arg(trailing_var_arg = true, value_name = "ARGS")]
     args: Vec<String>,
@@ -111,7 +114,7 @@ fn main() {
     if std::env::args_os().len() <= 1 {
         let _ = Cli::command().print_help();
         println!();
-        maybe_print_tasks_for_current_unit();
+        print_tasks_for_current_unit();
         return;
     }
 
@@ -123,7 +126,14 @@ fn main() {
             } else {
                 Some(args.args.join(" "))
             };
-            cmd_run_command(&args.target, args.force, args.quiet, args.verbose, appended)
+            cmd_run_command(
+                &args.target,
+                args.force,
+                args.quiet,
+                args.verbose,
+                args.watch,
+                appended,
+            )
         }
         Cli::Clean(args) => cmd_clean_command(&args.target),
         Cli::Env(args) => cmd_env_command(&args.target),
@@ -137,37 +147,5 @@ fn main() {
     if let Err(e) = result {
         eprintln!("error: {e}");
         std::process::exit(1);
-    }
-}
-
-fn maybe_print_tasks_for_current_unit() {
-    let cwd = match std::env::current_dir() {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-    let git_root = match get_git_root(&cwd) {
-        Ok(r) => r,
-        Err(_) => cwd.clone(),
-    };
-
-    let mut current = cwd.as_path();
-    while current.starts_with(&git_root) {
-        let scripts_path = current.join("SCRIPTS");
-        if scripts_path.exists() {
-            if let Ok(def) = read_scripts(current) {
-                println!("\nTasks in {}:", current.display());
-                let mut keys: Vec<_> = def.scripts.keys().collect();
-                keys.sort();
-                for key in keys {
-                    println!("  :{key}");
-                }
-                println!("\nTip: run `scripts run <task>` from this unit.");
-            }
-            break;
-        }
-        match current.parent() {
-            Some(parent) => current = parent,
-            None => break,
-        }
     }
 }

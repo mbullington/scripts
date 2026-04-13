@@ -8,7 +8,7 @@ scripts - pragmatic monorepo task runner with content-aware caching
 
 ```
 scripts
-scripts run [--force] [--quiet | --verbose] target [-- args...]
+scripts run [--force] [--quiet | --verbose] [--watch] target [-- args...]
 scripts env target
 scripts print-tree [--json] [--flat] target
 scripts clean [path]
@@ -20,8 +20,8 @@ scripts completions shell
 *scripts* executes unit-scoped tasks described in *SCRIPTS*(5) files.
 
 It is designed for polyglot repositories which need lightweight orchestration,
-dependency graphs, and content-aware caching without adopting a heavyweight,
-hermetic build system.
+dependency graphs, caching, and development workflows without adopting a
+heavier hermetic build system.
 
 Tasks are executed through *sh*(1). The current implementation targets Unix-like
 environments, including macOS and Linux.
@@ -36,7 +36,7 @@ from the nearest enclosing unit, if one can be found.
 Run a task and its dependencies.
 
 ```
-scripts run [--force] [--quiet | --verbose] target [-- args...]
+scripts run [--force] [--quiet | --verbose] [--watch] target [-- args...]
 ```
 
 If arguments are provided after *--*, they are appended to the root task's
@@ -47,12 +47,15 @@ Use *--force* to ignore cached results and execute the task graph again.
 Use *--quiet* to suppress routine task status lines. Use *--verbose* to print
 each task's working directory and shell command before execution.
 
+Use *--watch* to monitor watched units and re-run the target graph when changes
+are detected.
+
 ## env
 
 Start a shell with *PATH* prepared for a task.
 
 The shell inherits any *bin* paths declared by the target unit and its
-dependencies.
+dependencies, plus workspace-wide paths from *SCRIPTS_WORKSPACE.toml*(5).
 
 ```
 scripts env target
@@ -112,6 +115,9 @@ Examples:
 - *test*
 - *:test*
 
+If a path-like target is provided without *:<task>*, *scripts* reports an error
+and asks for the explicit *<unit>:<task>* form.
+
 # CACHING
 
 When a task declares *watch*, *scripts* hashes the task command text and the
@@ -125,6 +131,12 @@ Caching behaves as follows:
 
 A task is considered cached only when its own hash matches the stored value and
 none of its dependencies had to rerun.
+
+# WATCH MODE
+
+*--watch* monitors the units participating in the requested task graph and
+re-runs the graph when changes are detected. Tasks with
+*restart_policy = "never"* are skipped on watch-triggered reruns.
 
 # EXAMPLES
 
@@ -150,6 +162,12 @@ Force a rerun even when inputs are unchanged:
 
 ```
 scripts run --force tools/pkg:build
+```
+
+Re-run the graph when watched files change:
+
+```
+scripts run :dev --watch
 ```
 
 Suppress routine status lines:
@@ -191,8 +209,9 @@ scripts completions bash > ~/.local/share/bash-completion/completions/scripts
 # ENVIRONMENT
 
 *PATH*
-	Inherited and extended with any *bin* paths declared in *SCRIPTS*(5), plus
-	*node_modules/.bin* when present in the active unit.
+	Inherited and extended with task *bin* entries, dependency-provided *bin*
+	entries, and any workspace *bin_append* entries from
+	*SCRIPTS_WORKSPACE.toml*(5).
 
 *SHELL*
 	Used by *scripts env* to choose which shell to start. If unset,
@@ -202,6 +221,9 @@ scripts completions bash > ~/.local/share/bash-completion/completions/scripts
 
 *SCRIPTS*
 	Task definitions for a unit. See *SCRIPTS*(5).
+
+*SCRIPTS_WORKSPACE.toml*
+	Optional workspace configuration. See *SCRIPTS_WORKSPACE.toml*(5).
 
 *.scripts_cache*
 	JSON cache file stored at the git repository root.
@@ -223,4 +245,4 @@ boundaries, but it does not sandbox toolchains or the host environment.
 
 # SEE ALSO
 
-*SCRIPTS*(5), *scdoc*(1), *sh*(1), *git*(1)
+*SCRIPTS*(5), *SCRIPTS_WORKSPACE.toml*(5), *scdoc*(1), *sh*(1), *git*(1)

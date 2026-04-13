@@ -7,7 +7,8 @@ SCRIPTS - task definition file for scripts
 # DESCRIPTION
 
 *SCRIPTS* is a TOML file used by *scripts*(1) to define unit-scoped tasks,
-dependencies, watched inputs, and task-specific *PATH* entries.
+dependencies, watched inputs, PATH entries, watch-mode restart behavior, and
+optional readiness checks.
 
 A unit is any directory containing a *SCRIPTS* file.
 
@@ -54,8 +55,10 @@ depends on other tasks.
 
 ## bin
 
-Optional array of relative paths to prepend to *PATH* for that task when used
-with *scripts run* or *scripts env*.
+Optional array of relative paths to prepend to *PATH* for that task.
+
+These paths are made available when the task runs, when a dependent task runs,
+and when opening a shell with *scripts env*.
 
 ## watch
 
@@ -69,11 +72,39 @@ Caching semantics are intentionally simple:
 
 Patterns are evaluated relative to the unit directory.
 
+## restart_policy
+
+Optional watch-mode restart behavior.
+
+Supported values:
+
+- *"always"* - restart on watch-triggered reruns
+- *"never"* - skip this task on watch-triggered reruns
+
+If omitted, the default is *"always"*.
+
+## readiness
+
+Optional post-command readiness check.
+
+This is useful for commands that launch a background service and then exit.
+When present, the task is not considered successful until the readiness probe
+passes.
+
+Supported subkeys:
+
+- *port* - TCP port to probe
+- *host* - host name for *port* probes, default *127.0.0.1*
+- *exec* - shell command that exits *0* when ready
+- *timeout_ms* - timeout in milliseconds, default *30000*
+
+Exactly one of *port* or *exec* should be used.
+
 # EXAMPLE
 
 ```
 [build]
-bin = ["target/debug", "node_modules/.bin"]
+bin = ["target/debug"]
 deps = ["tools/pkg:build", ":lint"]
 command = """
 pnpm -C app build
@@ -85,6 +116,15 @@ command = """
 pnpm -C app lint
 """
 watch = ["app/**", "package.json", "pnpm-lock.yaml"]
+
+[dev]
+command = "./scripts/dev-server &"
+restart_policy = "never"
+watch = ["src/**"]
+
+[dev.readiness]
+exec = "curl -fsS http://127.0.0.1:3000/health"
+timeout_ms = 5000
 
 [release]
 deps = [":build", "packages/api:test"]
@@ -134,4 +174,4 @@ is not a hermetic build system.
 
 # SEE ALSO
 
-*scripts*(1), *scdoc*(5), *sh*(1), *toml*(5)
+*scripts*(1), *SCRIPTS_WORKSPACE.toml*(5), *scdoc*(5), *sh*(1), *toml*(5)

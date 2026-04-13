@@ -318,3 +318,99 @@ watch = []
         .success()
         .stdout(predicate::str::contains("helper"));
 }
+
+#[test]
+fn existing_unit_paths_require_explicit_task_names() {
+    let repo = init_repo();
+    write_file(
+        repo.path(),
+        "app/SCRIPTS",
+        r#"
+[build]
+watch = []
+"#,
+    );
+
+    scripts_command(&repo)
+        .args(["run", "app"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Units must include a task name"));
+}
+
+#[test]
+fn workspace_bin_append_is_added_to_path() {
+    let repo = init_repo();
+
+    write_file(
+        repo.path(),
+        "SCRIPTS_WORKSPACE.toml",
+        r#"bin_append = ["tools/bin"]
+"#,
+    );
+    write_file(
+        repo.path(),
+        "tools/bin/workspace-helper",
+        "#!/bin/sh\nprintf 'workspace-helper\n'\n",
+    );
+    let helper = repo.path().join("tools/bin/workspace-helper");
+    let mut perms = fs::metadata(&helper)
+        .expect("stat workspace helper")
+        .permissions();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        perms.set_mode(0o755);
+        fs::set_permissions(&helper, perms).expect("chmod workspace helper");
+    }
+
+    write_file(
+        repo.path(),
+        "app/SCRIPTS",
+        r#"
+[build]
+command = "workspace-helper"
+watch = []
+"#,
+    );
+
+    scripts_command(&repo)
+        .args(["run", "app:build"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("workspace-helper"));
+}
+
+#[test]
+fn readiness_exec_runs_before_dependents() {
+    let repo = init_repo();
+
+    write_file(
+        repo.path(),
+        "svc/SCRIPTS",
+        r#"
+[build]
+command = "printf 'svc\n'"
+watch = []
+
+[build.readiness]
+exec = "true"
+"#,
+    );
+    write_file(
+        repo.path(),
+        "app/SCRIPTS",
+        r#"
+[build]
+deps = ["svc:build"]
+command = "printf 'app\n'"
+watch = []
+"#,
+    );
+
+    scripts_command(&repo)
+        .args(["run", "app:build"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("svc").and(predicate::str::contains("app")));
+}
