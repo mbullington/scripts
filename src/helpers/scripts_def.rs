@@ -8,36 +8,6 @@ pub struct ScriptsDef {
     pub scripts: HashMap<String, Task>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum RestartPolicy {
-    #[default]
-    Always,
-    Never,
-}
-
-fn default_readiness_host() -> String {
-    "127.0.0.1".to_string()
-}
-
-fn default_readiness_timeout_ms() -> u64 {
-    30_000
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Readiness {
-    /// TCP port to probe for readiness.
-    pub port: Option<u16>,
-    /// Host for TCP readiness probes.
-    #[serde(default = "default_readiness_host")]
-    pub host: String,
-    /// Shell command that exits 0 when the service is ready.
-    pub exec: Option<String>,
-    /// Maximum time to wait for readiness.
-    #[serde(default = "default_readiness_timeout_ms")]
-    pub timeout_ms: u64,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Task {
     pub deps: Option<Vec<String>>,
@@ -49,11 +19,6 @@ pub struct Task {
     /// will always run. An empty list means only the command hash is used for
     /// caching.
     pub watch: Option<Vec<String>>,
-    /// Controls restart behavior when running in watch mode.
-    #[serde(default)]
-    pub restart_policy: RestartPolicy,
-    /// Optional readiness check to run after the task command succeeds.
-    pub readiness: Option<Readiness>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]

@@ -1,7 +1,7 @@
+
 # scripts
 
-A pragmatic monorepo task runner with content-aware caching, watch mode, and
-simple service orchestration.
+A pragmatic monorepo task runner with content-aware caching and watch mode.
 
 - simple TOML configuration
 - dependency graphs across units and languages
@@ -9,9 +9,7 @@ simple service orchestration.
 - watch mode for development workflows
 - no daemon, no remote service, intentionally non-hermetic
 
-Website: https://mbullington.github.io/scripts/
-
-Repository docs also include scdoc man page sources under `docs/man/`.
+Repository docs include scdoc man page sources under `docs/man/`.
 
 ## Installation
 
@@ -45,7 +43,7 @@ Run tasks:
 scripts run :build
 scripts run :test
 scripts run :build --force
-scripts run :dev --watch
+scripts run :build --watch
 ```
 
 ## Task fields
@@ -57,14 +55,6 @@ scripts run :dev --watch
   - `[]`: hash only the command text
   - non-empty list: hash command text plus watched file contents
 - `bin`: optional list of paths added to `PATH` for the task and its dependents
-- `restart_policy`: optional watch-mode restart behavior
-  - `"always"` (default)
-  - `"never"`
-- `readiness`: optional post-command readiness check
-  - `port`
-  - `host` (default `127.0.0.1`)
-  - `exec`
-  - `timeout_ms` (default `30000`)
 
 ## Workspace configuration
 
@@ -93,7 +83,7 @@ Run a task and its dependencies.
 ```sh
 scripts run app:build
 scripts run build
-scripts run :dev --watch
+scripts run :build --watch
 scripts run dev -- echo done
 scripts run --force tools/pkg:build
 scripts run --quiet app:build
@@ -103,7 +93,7 @@ scripts run --verbose app:build
 Notes:
 - use `app:build` for another unit, or `build` / `:build` for the current unit
 - anything after `--` is appended to the root task command and becomes part of the cache key
-- `--watch` re-runs the target graph when changes are detected
+- `--watch` starts after the graph finishes, then re-runs the target graph when watched inputs change
 - `--quiet` suppresses routine task status lines but still streams task output
 - `--verbose` shows the working directory and shell command for each task
 - task status lines are written to stderr so stdout stays usable for task output
@@ -115,6 +105,16 @@ Start a shell with `PATH` prepared for a task.
 ```sh
 scripts env app:dev
 scripts env dev
+```
+
+### `scripts wait [--port PORT | --exec COMMAND]`
+
+Wait for a TCP port or shell command to become ready. This is a small helper for composing readiness checks inside task commands; `scripts` does not attach readiness or process lifecycle policy to the task schema.
+
+```sh
+scripts wait --port 3000
+scripts wait --host localhost --port 8080 --timeout-ms 10000
+scripts wait --exec 'curl -fsS http://127.0.0.1:3000/health'
 ```
 
 ### `scripts print-tree <TARGET>`
@@ -223,10 +223,10 @@ A task is cached only when its own hash matches and none of its dependencies had
 
 - **Hermeticity.** `scripts` does not isolate builds from the host environment or require every dependency to be modeled inside `scripts`.
 - **Remote execution.** This is a local orchestration tool, not a distributed build system.
+- **Process supervision.** `scripts run --watch` reruns completed task graphs; it does not manage long-running service lifecycles.
 
 ## Roadmap
 
 - better TUI/status output
-- richer watch-mode behavior for long-running workflows
 - structured event output for richer UIs
 - optional remote cache later, if it proves worthwhile

@@ -6,7 +6,7 @@ use crate::helpers::{
     cache::compute_task_hash,
     graph::TaskGraph,
     path::{build_path_var, collect_task_bins, resolve_workspace_bins},
-    scripts_def::{Readiness, RestartPolicy, WorkspaceConfig},
+    scripts_def::WorkspaceConfig,
 };
 
 #[derive(Clone, Debug)]
@@ -20,7 +20,6 @@ pub struct PlanEntry {
     pub cache_key: String,
     pub cache_hash: Option<String>,
     pub should_run: bool,
-    pub readiness: Option<Readiness>,
 }
 
 #[derive(Debug)]
@@ -36,7 +35,6 @@ impl RunPlan {
         force: bool,
         append_cmd: Option<&String>,
         workspace_config: Option<&WorkspaceConfig>,
-        watch_triggered: bool,
     ) -> Result<Self> {
         let mut entries = Vec::with_capacity(graph.scripts.len());
 
@@ -48,14 +46,7 @@ impl RunPlan {
             };
             let cache_key = format!("{}:{}", node.unit_path.display(), node.task_name);
             let cache_hash = compute_task_hash(node, command.as_deref())?;
-            let should_run = should_run_task(
-                node,
-                cache,
-                force,
-                &cache_key,
-                cache_hash.as_ref(),
-                watch_triggered,
-            );
+            let should_run = should_run_task(cache, force, &cache_key, cache_hash.as_ref());
 
             let mut bins = collect_task_bins(graph, idx);
             bins.extend(resolve_workspace_bins(
@@ -74,31 +65,20 @@ impl RunPlan {
                 cache_key,
                 cache_hash,
                 should_run,
-                readiness: node.task.readiness.clone(),
             });
         }
 
-        mark_dependents_dirty(graph, &mut entries, watch_triggered);
+        mark_dependents_dirty(&mut entries);
         Ok(Self { entries })
     }
 }
 
-fn should_skip_for_watch_rerun(watch_triggered: bool, restart_policy: &RestartPolicy) -> bool {
-    watch_triggered && matches!(restart_policy, RestartPolicy::Never)
-}
-
 fn should_run_task(
-    node: &crate::helpers::graph::TaskGraphNode,
     cache: &HashMap<String, String>,
     force: bool,
     cache_key: &str,
     cache_hash: Option<&String>,
-    watch_triggered: bool,
 ) -> bool {
-    if should_skip_for_watch_rerun(watch_triggered, &node.task.restart_policy) {
-        return false;
-    }
-
     if force {
         return true;
     }
@@ -109,21 +89,13 @@ fn should_run_task(
     }
 }
 
-fn mark_dependents_dirty(graph: &TaskGraph, entries: &mut [PlanEntry], watch_triggered: bool) {
+fn mark_dependents_dirty(entries: &mut [PlanEntry]) {
     for idx in 0..entries.len() {
-        if entries[idx].should_run {
-            continue;
-        }
-
-        let dependency_ran = entries[idx]
-            .dependencies
-            .iter()
-            .any(|dep| entries[*dep].should_run);
-        if dependency_ran
-            && !should_skip_for_watch_rerun(
-                watch_triggered,
-                &graph.scripts[idx].task.restart_policy,
-            )
+        if !entries[idx].should_run
+            && entries[idx]
+                .dependencies
+                .iter()
+                .any(|dep| entries[*dep].should_run)
         {
             entries[idx].should_run = true;
         }

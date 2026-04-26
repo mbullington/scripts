@@ -4,8 +4,6 @@ use anyhow::Result;
 use colored::*;
 use dagrs::{log as daglog, Action, Dag, DefaultTask, EnvVar, Input, LogLevel, Output, Task};
 
-use crate::helpers::readiness::wait_for_readiness;
-
 use super::run_plan::{PlanEntry, RunPlan};
 
 #[derive(Clone, Copy, Debug)]
@@ -180,15 +178,6 @@ impl RunAction {
     }
 
     fn finish_success(&self) -> Result<Output, dagrs::RunningError> {
-        if let Some(readiness) = &self.entry.readiness {
-            if let Err(error) = wait_for_readiness(readiness, &self.entry.name) {
-                self.finish_failure();
-                let detail = format!("({error})");
-                print_status(self.output_mode, "FAIL", &self.entry.name, Some(&detail));
-                return Err(dagrs::RunningError::new(error.to_string()));
-            }
-        }
-
         self.set_state(TaskState::Succeeded);
         self.events.lock().unwrap().push(TaskEvent::Succeeded {
             cache_key: self.entry.cache_key.clone(),

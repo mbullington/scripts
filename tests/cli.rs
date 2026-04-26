@@ -544,35 +544,23 @@ watch = []
 }
 
 #[test]
-fn readiness_exec_runs_before_dependents() {
+fn wait_exec_succeeds_when_command_is_ready() {
     let repo = init_repo();
 
-    write_file(
-        repo.path(),
-        "svc/SCRIPTS",
-        r#"
-[build]
-command = "printf 'svc\n'"
-watch = []
-
-[build.readiness]
-exec = "true"
-"#,
-    );
-    write_file(
-        repo.path(),
-        "app/SCRIPTS",
-        r#"
-[build]
-deps = ["svc:build"]
-command = "printf 'app\n'"
-watch = []
-"#,
-    );
-
     scripts_command(&repo)
-        .args(["run", "app:build"])
+        .args(["wait", "--exec", "true"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("svc").and(predicate::str::contains("app")));
+        .stdout(predicate::str::contains("ready"));
+}
+
+#[test]
+fn wait_requires_a_port_or_exec_check() {
+    let repo = init_repo();
+
+    scripts_command(&repo)
+        .args(["wait", "--timeout-ms", "1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("requires '--port' or '--exec'"));
 }

@@ -7,8 +7,7 @@ SCRIPTS - task definition file for scripts
 # DESCRIPTION
 
 *SCRIPTS* is a TOML file used by *scripts*(1) to define unit-scoped tasks,
-dependencies, watched inputs, PATH entries, watch-mode restart behavior, and
-optional readiness checks.
+dependencies, watched inputs, and PATH entries.
 
 A unit is any directory containing a *SCRIPTS* file.
 
@@ -72,34 +71,6 @@ Caching semantics are intentionally simple:
 
 Patterns are evaluated relative to the unit directory.
 
-## restart_policy
-
-Optional watch-mode restart behavior.
-
-Supported values:
-
-- *"always"* - restart on watch-triggered reruns
-- *"never"* - skip this task on watch-triggered reruns
-
-If omitted, the default is *"always"*.
-
-## readiness
-
-Optional post-command readiness check.
-
-This is useful for commands that launch a background service and then exit.
-When present, the task is not considered successful until the readiness probe
-passes.
-
-Supported subkeys:
-
-- *port* - TCP port to probe
-- *host* - host name for *port* probes, default *127.0.0.1*
-- *exec* - shell command that exits *0* when ready
-- *timeout_ms* - timeout in milliseconds, default *30000*
-
-Exactly one of *port* or *exec* should be used.
-
 # EXAMPLE
 
 ```
@@ -116,15 +87,6 @@ command = """
 pnpm -C app lint
 """
 watch = ["app/**", "package.json", "pnpm-lock.yaml"]
-
-[dev]
-command = "./scripts/dev-server &"
-restart_policy = "never"
-watch = ["src/**"]
-
-[dev.readiness]
-exec = "curl -fsS http://127.0.0.1:3000/health"
-timeout_ms = 5000
 
 [release]
 deps = [":build", "packages/api:test"]

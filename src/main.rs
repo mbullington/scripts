@@ -5,18 +5,22 @@ use std::io;
 
 use clap::{CommandFactory, Parser};
 use clap_complete::{generate, Shell};
-use commands::{cmd_clean_command, cmd_env_command, cmd_print_tree_command, cmd_run_command};
+use commands::{
+    cmd_clean_command, cmd_env_command, cmd_print_tree_command, cmd_run_command, cmd_wait_command,
+};
 
 use crate::helpers::task_list::print_tasks_for_current_unit;
 
 mod commands;
 mod helpers;
 
-const ROOT_AFTER_HELP: &str = "Examples:\n  scripts run app:build\n  scripts run build\n  scripts run :dev --watch\n  scripts print-tree app:test --json\n  scripts env dev\n  scripts completions bash > ~/.local/share/bash-completion/completions/scripts\n\nTarget syntax:\n  <unit>:<task>   Run a specific task in another unit\n  <task>          Run a task in the current unit\n  :<task>         Also run a task in the current unit";
+const ROOT_AFTER_HELP: &str = "Examples:\n  scripts run app:build\n  scripts run build\n  scripts run :build --watch\n  scripts wait --port 3000\n  scripts print-tree app:test --json\n  scripts env dev\n  scripts completions bash > ~/.local/share/bash-completion/completions/scripts\n\nTarget syntax:\n  <unit>:<task>   Run a specific task in another unit\n  <task>          Run a task in the current unit\n  :<task>         Also run a task in the current unit";
 
-const RUN_AFTER_HELP: &str = "Examples:\n  scripts run app:build\n  scripts run build\n  scripts run :dev --watch\n  scripts run dev -- echo done\n  scripts run --force tools/pkg:build\n  scripts run --quiet app:build\n  scripts run --verbose app:build";
+const RUN_AFTER_HELP: &str = "Examples:\n  scripts run app:build\n  scripts run build\n  scripts run :build --watch\n  scripts run dev -- echo done\n  scripts run --force tools/pkg:build\n  scripts run --quiet app:build\n  scripts run --verbose app:build";
 
 const ENV_AFTER_HELP: &str = "Examples:\n  scripts env app:dev\n  scripts env dev";
+
+const WAIT_AFTER_HELP: &str = "Examples:\n  scripts wait --port 3000\n  scripts wait --host localhost --port 8080 --timeout-ms 10000\n  scripts wait --exec 'curl -fsS http://127.0.0.1:3000/health'";
 
 const PRINT_TREE_AFTER_HELP: &str = "Examples:\n  scripts print-tree app:build\n  scripts tree app:build --flat\n  scripts print-tree app:test --json";
 
@@ -36,6 +40,8 @@ enum Cli {
     Clean(CleanArgs),
     /// Start a shell with PATH prepared for a task.
     Env(EnvArgs),
+    /// Wait for a port or command to become ready.
+    Wait(WaitArgs),
     /// Print a task's dependency graph.
     #[command(visible_alias = "tree")]
     PrintTree(PrintTreeArgs),
@@ -83,6 +89,24 @@ struct EnvArgs {
     #[arg(value_name = "TARGET")]
     /// Task target. Use <unit>:<task> for another unit or <task> for the current unit.
     target: String,
+}
+
+#[derive(Debug, clap::Args)]
+#[command(about = "Wait for a port or command to become ready.")]
+#[command(after_help = WAIT_AFTER_HELP)]
+struct WaitArgs {
+    /// TCP port to probe.
+    #[arg(long, conflicts_with = "exec")]
+    port: Option<u16>,
+    /// Host for TCP port probes.
+    #[arg(long, default_value = "127.0.0.1")]
+    host: String,
+    /// Shell command that must exit successfully.
+    #[arg(long, conflicts_with = "port")]
+    exec: Option<String>,
+    /// Maximum time to wait in milliseconds.
+    #[arg(long, default_value_t = 30_000)]
+    timeout_ms: u64,
 }
 
 #[derive(Debug, clap::Args)]
@@ -137,6 +161,7 @@ fn main() {
         }
         Cli::Clean(args) => cmd_clean_command(&args.target),
         Cli::Env(args) => cmd_env_command(&args.target),
+        Cli::Wait(args) => cmd_wait_command(args.port, args.host, args.exec, args.timeout_ms),
         Cli::PrintTree(args) => cmd_print_tree_command(&args.target, args.json, args.flat),
         Cli::Completions(args) => {
             let mut command = Cli::command();

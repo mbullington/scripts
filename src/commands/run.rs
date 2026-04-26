@@ -79,7 +79,6 @@ fn run_once(
     force: bool,
     output_mode: RunOutputMode,
     append_cmd: &Option<String>,
-    watch_triggered: bool,
 ) -> Result<RunOnceResult> {
     let (unit, task_name) = parse_target(target)?;
     let unit_path = Path::new(&unit);
@@ -103,7 +102,6 @@ fn run_once(
         force,
         append_cmd.as_ref(),
         workspace_config.as_ref(),
-        watch_triggered,
     )?;
     let outcome = execute_plan(&plan, output_mode);
 
@@ -163,7 +161,7 @@ fn watch_target_graph(
                 }
 
                 eprintln!("change detected; re-running target graph");
-                if let Err(error) = run_once(target, false, output_mode, append_cmd, true) {
+                if let Err(error) = run_once(target, false, output_mode, append_cmd) {
                     eprintln!("watch re-run failed: {error}");
                 }
                 eprintln!("watching for changes... (Ctrl+C to exit)");
@@ -188,7 +186,7 @@ pub fn cmd_run_command(
 ) -> Result<()> {
     let output_mode = output_mode(quiet, verbose);
 
-    let initial = run_once(target, force, output_mode, &append_cmd, false)?;
+    let initial = run_once(target, force, output_mode, &append_cmd)?;
     if !watch {
         return Ok(());
     }
