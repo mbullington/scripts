@@ -146,12 +146,17 @@ unit.
 
 # CACHING
 
-The cache key for a task is derived from:
+The cache key identifies a task by its canonical unit path and task name.
 
-- the canonical unit path
-- the task name
+The cached hash for a task with *watch* present is derived from:
+
+- a cache format version
 - the command text
-- watched file contents, when *watch* is present
+- dependency, *bin*, and *watch* declarations
+- watched file contents
+
+The repository *.scripts_cache* file is ignored when hashing watched files, so
+broad patterns like *watch = ["."]* do not invalidate themselves.
 
 If a watched file is renamed, added, removed, or modified, the task hash
 changes.

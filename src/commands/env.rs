@@ -24,13 +24,11 @@ pub fn cmd_env_command(target: &str) -> Result<()> {
         }
     };
 
-    let absolute_unit_path = unit_path.canonicalize()?;
-    let root_idx = graph.scripts.len().saturating_sub(1);
-    let mut bins = collect_task_bins(&graph, root_idx);
-
+    let root_unit_path = &graph.scripts[graph.root].unit_path;
+    let mut bins = collect_task_bins(&graph, graph.root);
     bins.extend(resolve_workspace_bins(
         &git_root,
-        &absolute_unit_path,
+        root_unit_path,
         workspace_config.as_ref(),
     ));
 

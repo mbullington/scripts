@@ -50,11 +50,9 @@ scripts run :dev --watch
 
 ## Task fields
 
-- `deps`: optional list of dependencies
-  - `"task"` or `":task"` for the current unit
-  - `"path/to/unit:task"` for another unit
-- `command`: optional shell command
-- `watch`: optional list of files or glob patterns to hash
+- `deps`: optional list of dependencies. Use `<unit>:<task>` for another unit, or `<task>` / `:<task>` for the current unit.
+- `command`: optional shell command. Tasks without a command can still exist to group dependencies.
+- `watch`: optional list of files or glob patterns to hash.
   - omitted: always run
   - `[]`: hash only the command text
   - non-empty list: hash command text plus watched file contents
@@ -210,10 +208,14 @@ The first matching path that contains a `SCRIPTS` file wins.
 
 ## Cache behavior
 
-For each task, `scripts` hashes:
+For each task with `watch` present, `scripts` hashes:
 
+- a cache format version
 - the task command text
+- dependency, `bin`, and `watch` declarations
 - the contents of any watched files
+
+The repository `.scripts_cache` file is ignored when hashing watched files, so broad patterns like `watch = ["."]` do not invalidate themselves.
 
 A task is cached only when its own hash matches and none of its dependencies had to rerun.
 

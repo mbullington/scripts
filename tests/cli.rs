@@ -22,6 +22,17 @@ fn write_file(root: &Path, relative_path: &str, contents: &str) {
     fs::write(path, contents).expect("write file");
 }
 
+fn make_executable(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut perms = fs::metadata(path).expect("stat executable").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms).expect("chmod executable");
+    }
+}
+
 fn scripts_command(repo: &TempDir) -> Command {
     let mut command = Command::cargo_bin("scripts").expect("find scripts binary");
     command.current_dir(repo.path());
@@ -77,6 +88,138 @@ watch = ["file.txt"]
         .assert()
         .success()
         .stdout(predicate::str::contains("ran-app").and(predicate::str::contains("ran-dep").not()));
+}
+
+#[test]
+fn cache_hash_includes_dependency_declarations() {
+    let repo = init_repo();
+
+    write_file(
+        repo.path(),
+        "dep/SCRIPTS",
+        r#"
+[build]
+command = "printf 'dep\n'"
+watch = []
+"#,
+    );
+    write_file(
+        repo.path(),
+        "app/SCRIPTS",
+        r#"
+[build]
+command = "printf 'app\n'"
+watch = []
+"#,
+    );
+
+    scripts_command(&repo)
+        .args(["run", "dep:build"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("dep"));
+    scripts_command(&repo)
+        .args(["run", "app:build"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("app"));
+
+    write_file(
+        repo.path(),
+        "app/SCRIPTS",
+        r#"
+[build]
+deps = ["dep:build"]
+command = "printf 'app\n'"
+watch = []
+"#,
+    );
+
+    scripts_command(&repo)
+        .args(["run", "app:build"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("app"));
+}
+
+#[test]
+fn cache_hash_includes_bin_declarations() {
+    let repo = init_repo();
+
+    write_file(
+        repo.path(),
+        "tool/bin1/helper",
+        "#!/bin/sh\nprintf 'one\n'\n",
+    );
+    make_executable(&repo.path().join("tool/bin1/helper"));
+    write_file(
+        repo.path(),
+        "tool/bin2/helper",
+        "#!/bin/sh\nprintf 'two\n'\n",
+    );
+    make_executable(&repo.path().join("tool/bin2/helper"));
+    write_file(
+        repo.path(),
+        "tool/SCRIPTS",
+        r#"
+[build]
+bin = ["bin1"]
+command = "helper"
+watch = []
+"#,
+    );
+
+    scripts_command(&repo)
+        .args(["run", "tool:build"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("one"));
+
+    write_file(
+        repo.path(),
+        "tool/SCRIPTS",
+        r#"
+[build]
+bin = ["bin2"]
+command = "helper"
+watch = []
+"#,
+    );
+
+    scripts_command(&repo)
+        .args(["run", "tool:build"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("two"));
+}
+
+#[test]
+fn watch_dot_ignores_the_cache_file_it_writes() {
+    let repo = init_repo();
+
+    write_file(
+        repo.path(),
+        "SCRIPTS",
+        r#"
+[build]
+command = "printf 'run\n'"
+watch = ["."]
+"#,
+    );
+    write_file(repo.path(), "input.txt", "hello\n");
+
+    scripts_command(&repo)
+        .args(["run", "build"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("run"));
+
+    scripts_command(&repo)
+        .args(["run", "build"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("run").not())
+        .stderr(predicate::str::contains("CACHED"));
 }
 
 #[test]
@@ -193,6 +336,32 @@ fn clean_reports_when_the_cache_file_is_removed() {
 }
 
 #[test]
+fn failed_dependencies_report_skipped_dependents() {
+    let repo = init_repo();
+
+    write_file(
+        repo.path(),
+        "SCRIPTS",
+        r#"
+[dep]
+command = "exit 7"
+watch = []
+
+[build]
+deps = [":dep"]
+command = "printf 'build\n'"
+watch = []
+"#,
+    );
+
+    scripts_command(&repo)
+        .args(["run", "build"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("FAIL").and(predicate::str::contains("SKIP")));
+}
+
+#[test]
 fn quiet_run_hides_routine_status_lines() {
     let repo = init_repo();
     write_file(
@@ -292,14 +461,7 @@ watch = []
         "tool/bin/helper",
         "#!/bin/sh\nprintf 'helper\n'\n",
     );
-    let helper = repo.path().join("tool/bin/helper");
-    let mut perms = fs::metadata(&helper).expect("stat helper").permissions();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        perms.set_mode(0o755);
-        fs::set_permissions(&helper, perms).expect("chmod helper");
-    }
+    make_executable(&repo.path().join("tool/bin/helper"));
 
     write_file(
         repo.path(),

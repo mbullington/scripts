@@ -7,7 +7,7 @@ use std::{
 use thiserror::Error;
 
 use super::{
-    resolve::{read_scripts, resolve_scripts_path, ResolveScriptsError},
+    resolve::{parse_dependency, read_scripts, resolve_scripts_path, ResolveScriptsError},
     scripts_def::Task,
 };
 
@@ -24,7 +24,7 @@ pub struct TaskGraphNode {
 #[derive(Debug)]
 pub struct TaskGraph {
     pub scripts: Vec<TaskGraphNode>,
-    pub handle_map: HashMap<(PathBuf, String), TaskGraphHandle>,
+    pub root: TaskGraphHandle,
 }
 
 #[derive(Error, Debug)]
@@ -73,34 +73,6 @@ impl Display for TaggedResolveScriptsError {
             E::GitError(e) => write!(f, "{}: {e}", self.path.display()),
         }
     }
-}
-
-fn parse_dep(dep: &str) -> Result<(String, String), ResolveScriptsError> {
-    if let Some(pos) = dep.rfind(':') {
-        let (path, task) = dep.split_at(pos);
-        let task = &task[1..];
-        if task.is_empty() {
-            return Err(ResolveScriptsError::InvalidTarget(format!(
-                "invalid dependency '{dep}'. Missing task name after ':'"
-            )));
-        }
-
-        return Ok((path.to_string(), task.to_string()));
-    }
-
-    let looks_like_path = dep.contains('/')
-        || dep == "."
-        || dep == ".."
-        || dep.starts_with("./")
-        || dep.starts_with("../");
-
-    if looks_like_path {
-        return Err(ResolveScriptsError::InvalidTarget(format!(
-            "invalid dependency '{dep}'. Use '<unit>:<task>' for another unit or '<task>' for the current unit"
-        )));
-    }
-
-    Ok((String::new(), dep.to_string()))
 }
 
 fn format_task_ref(unit_path: &Path, task_name: &str) -> String {
@@ -163,7 +135,7 @@ pub fn build_task_graph(
             if let Some(deps) = &task_def.deps {
                 for dep in deps {
                     let (dep_unit, dep_task) =
-                        parse_dep(dep).map_err(|error| TaggedResolveScriptsError {
+                        parse_dependency(dep).map_err(|error| TaggedResolveScriptsError {
                             path: unit_path.clone(),
                             error,
                         })?;
@@ -204,7 +176,7 @@ pub fn build_task_graph(
             error: ResolveScriptsError::IO(error),
         })?;
 
-    add_task(
+    let root = add_task(
         initial_path,
         task.to_string(),
         &mut scripts,
@@ -212,8 +184,5 @@ pub fn build_task_graph(
         &mut visiting,
     )?;
 
-    Ok(TaskGraph {
-        scripts,
-        handle_map,
-    })
+    Ok(TaskGraph { scripts, root })
 }

@@ -82,6 +82,19 @@ pub fn read_scripts(path: &Path) -> Result<ScriptsDef, ResolveScriptsError> {
     }
 }
 
+fn split_explicit_target(target: &str) -> std::result::Result<Option<(&str, &str)>, ()> {
+    if let Some(pos) = target.rfind(':') {
+        let (path, task) = target.split_at(pos);
+        let task = &task[1..];
+        if task.is_empty() {
+            return Err(());
+        }
+        return Ok(Some((path, task)));
+    }
+
+    Ok(None)
+}
+
 fn looks_like_unit_path(target: &str) -> bool {
     target.contains('/')
         || target == "."
@@ -91,17 +104,13 @@ fn looks_like_unit_path(target: &str) -> bool {
         || Path::new(target).exists()
 }
 
-/// Split a task target into the unit path and task name.
+/// Split a CLI task target into the unit path and task name.
 pub fn parse_target(target: &str) -> AnyhowResult<(String, String)> {
-    if let Some(pos) = target.rfind(':') {
-        let (path, task) = target.split_at(pos);
-        let task = &task[1..];
-        if task.is_empty() {
-            bail!(
-                "invalid target '{target}'. Missing task name after ':'. Use 'build' for the current unit or '<unit>:build' for another unit"
-            );
-        }
-
+    if let Some((path, task)) = split_explicit_target(target).map_err(|()| {
+        anyhow::anyhow!(
+            "invalid target '{target}'. Missing task name after ':'. Use 'build' for the current unit or '<unit>:build' for another unit"
+        )
+    })? {
         return Ok((
             if path.is_empty() { "." } else { path }.to_string(),
             task.to_string(),
@@ -115,6 +124,25 @@ pub fn parse_target(target: &str) -> AnyhowResult<(String, String)> {
     }
 
     Ok((".".to_string(), target.to_string()))
+}
+
+/// Split a dependency reference into an optional unit path and task name.
+pub fn parse_dependency(dep: &str) -> Result<(String, String), ResolveScriptsError> {
+    if let Some((path, task)) = split_explicit_target(dep).map_err(|()| {
+        ResolveScriptsError::InvalidTarget(format!(
+            "invalid dependency '{dep}'. Missing task name after ':'"
+        ))
+    })? {
+        return Ok((path.to_string(), task.to_string()));
+    }
+
+    if looks_like_unit_path(dep) {
+        return Err(ResolveScriptsError::InvalidTarget(format!(
+            "invalid dependency '{dep}'. Use '<unit>:<task>' for another unit or '<task>' for the current unit"
+        )));
+    }
+
+    Ok((String::new(), dep.to_string()))
 }
 
 pub fn read_workspace_config(git_root: &Path) -> Option<WorkspaceConfig> {

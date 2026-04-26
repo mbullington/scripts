@@ -67,12 +67,7 @@ pub fn cmd_print_tree_command(target: &str, json: bool, flat: bool) -> Result<()
     let unit_path = Path::new(&unit);
     let git_root = get_git_root(unit_path)?;
     let graph: TaskGraph = build_task_graph(unit_path, &task)?;
-    let unit_canon = unit_path.canonicalize()?;
-    let root_handle = graph
-        .handle_map
-        .get(&(unit_canon, task.clone()))
-        .copied()
-        .unwrap_or(graph.scripts.len() - 1);
+    let root_handle = graph.root;
     if flat {
         let mut set = std::collections::BTreeSet::new();
         get_flat(&graph, root_handle, &git_root, &mut set);
