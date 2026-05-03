@@ -214,9 +214,3 @@ A task is cached only when its own hash matches and none of its dependencies had
 - **Hermeticity.** `scripts` does not isolate builds from the host environment or require every dependency to be modeled inside `scripts`.
 - **Remote execution.** This is a local orchestration tool, not a distributed build system.
 - **Process supervision.** `scripts run --watch` reruns completed task graphs; it does not manage long-running service lifecycles.
-
-## Roadmap
-
-- better TUI/status output
-- structured event output for richer UIs
-- optional remote cache later, if it proves worthwhile
