@@ -107,16 +107,6 @@ scripts env app:dev
 scripts env dev
 ```
 
-### `scripts wait [--port PORT | --exec COMMAND]`
-
-Wait for a TCP port or shell command to become ready. This is a small helper for composing readiness checks inside task commands; `scripts` does not attach readiness or process lifecycle policy to the task schema.
-
-```sh
-scripts wait --port 3000
-scripts wait --host localhost --port 8080 --timeout-ms 10000
-scripts wait --exec 'curl -fsS http://127.0.0.1:3000/health'
-```
-
 ### `scripts print-tree <TARGET>`
 
 Print a task's dependency graph.

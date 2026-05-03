@@ -542,25 +542,3 @@ watch = []
         .success()
         .stdout(predicate::str::contains("workspace-helper"));
 }
-
-#[test]
-fn wait_exec_succeeds_when_command_is_ready() {
-    let repo = init_repo();
-
-    scripts_command(&repo)
-        .args(["wait", "--exec", "true"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("ready"));
-}
-
-#[test]
-fn wait_requires_a_port_or_exec_check() {
-    let repo = init_repo();
-
-    scripts_command(&repo)
-        .args(["wait", "--timeout-ms", "1"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("requires '--port' or '--exec'"));
-}

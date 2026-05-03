@@ -10,7 +10,6 @@ scripts - pragmatic monorepo task runner with content-aware caching
 scripts
 scripts run [--force] [--quiet | --verbose] [--watch] target [-- args...]
 scripts env target
-scripts wait [--port port | --exec command]
 scripts print-tree [--json] [--flat] target
 scripts clean [path]
 scripts completions shell
@@ -64,26 +63,6 @@ scripts env target
 ```
 
 The current working directory is not changed.
-
-## wait
-
-Wait for a TCP port or shell command to become ready.
-
-```
-scripts wait [--port port | --exec command] [--host host] [--timeout-ms ms]
-```
-
-Use *--port* to probe a TCP port. Use *--host* to choose the host for port
-probes; the default is *127.0.0.1*.
-
-Use *--exec* to run a shell command until it exits successfully.
-
-Use *--timeout-ms* to set the maximum wait time in milliseconds. The default is
-*30000*.
-
-This is a composable helper intended for use inside task commands. *scripts*
-does not attach readiness or process lifecycle policy to the *SCRIPTS*(5)
-schema.
 
 ## print-tree
 
@@ -191,12 +170,6 @@ Re-run the graph when watched files change:
 
 ```
 scripts run :build --watch
-```
-
-Wait for a local service in a task command or shell script:
-
-```
-scripts wait --port 3000
 ```
 
 Suppress routine status lines:
