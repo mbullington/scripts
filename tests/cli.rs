@@ -1,4 +1,10 @@
-use std::{fs, path::Path, process::Command};
+use std::{
+    fs,
+    path::Path,
+    process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
 
 use assert_cmd::{assert::OutputAssertExt, cargo::CommandCargoExt};
 use predicates::prelude::*;
@@ -37,6 +43,23 @@ fn scripts_command(repo: &TempDir) -> Command {
     let mut command = Command::cargo_bin("scripts").expect("find scripts binary");
     command.current_dir(repo.path());
     command
+}
+
+fn wait_until(description: &str, timeout: Duration, mut condition: impl FnMut() -> bool) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if condition() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    panic!("timed out waiting for {description}");
+}
+
+fn line_count(path: &Path) -> usize {
+    fs::read_to_string(path)
+        .map(|contents| contents.lines().count())
+        .unwrap_or(0)
 }
 
 #[test]
@@ -324,7 +347,7 @@ watch = []
 }
 
 #[test]
-fn clean_reports_when_the_cache_file_is_removed() {
+fn clean_removes_legacy_cache_file() {
     let repo = init_repo();
     write_file(repo.path(), ".scripts_cache", "{}\n");
 
@@ -333,6 +356,24 @@ fn clean_reports_when_the_cache_file_is_removed() {
         .assert()
         .success()
         .stdout(predicate::str::contains("removed"));
+}
+
+#[test]
+fn clean_removes_cache_directory() {
+    let repo = init_repo();
+    write_file(repo.path(), "SCRIPTS", "[build]\nwatch = []\n");
+    scripts_command(&repo)
+        .args(["run", "build"])
+        .assert()
+        .success();
+    assert!(repo.path().join(".scripts_cache").is_dir());
+
+    scripts_command(&repo)
+        .args(["clean"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("removed"));
+    assert!(!repo.path().join(".scripts_cache").exists());
 }
 
 #[test]
@@ -422,13 +463,17 @@ fn completions_command_generates_shell_script() {
 }
 
 #[test]
-fn path_like_dependency_targets_require_explicit_task_names() {
+fn path_like_dependency_names_are_current_unit_tasks() {
     let repo = init_repo();
 
     write_file(
         repo.path(),
         "app/SCRIPTS",
         r#"
+["tools/pkg"]
+command = "printf 'path-like-task\n'"
+watch = []
+
 [build]
 deps = ["tools/pkg"]
 watch = []
@@ -436,10 +481,10 @@ watch = []
     );
 
     scripts_command(&repo)
-        .args(["print-tree", "app:build"])
+        .args(["run", "app:build"])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("invalid dependency 'tools/pkg'"));
+        .success()
+        .stdout(predicate::str::contains("path-like-task"));
 }
 
 #[test]
@@ -482,22 +527,24 @@ watch = []
 }
 
 #[test]
-fn existing_unit_paths_require_explicit_task_names() {
+fn task_names_do_not_change_meaning_when_a_matching_directory_exists() {
     let repo = init_repo();
     write_file(
         repo.path(),
-        "app/SCRIPTS",
+        "SCRIPTS",
         r#"
-[build]
+[app]
+command = "printf 'task-app\n'"
 watch = []
 "#,
     );
+    fs::create_dir(repo.path().join("app")).expect("create matching directory");
 
     scripts_command(&repo)
         .args(["run", "app"])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("Units must include a task name"));
+        .success()
+        .stdout(predicate::str::contains("task-app"));
 }
 
 #[test]
@@ -541,4 +588,402 @@ watch = []
         .assert()
         .success()
         .stdout(predicate::str::contains("workspace-helper"));
+}
+
+#[test]
+fn tasks_run_from_descendants_of_their_unit() {
+    let repo = init_repo();
+    write_file(
+        repo.path(),
+        "unit/SCRIPTS",
+        r#"
+[build]
+command = "printf 'nested-unit\n'"
+watch = []
+"#,
+    );
+    fs::create_dir_all(repo.path().join("unit/src/nested")).expect("create nested directory");
+
+    scripts_command(&repo)
+        .current_dir(repo.path().join("unit/src/nested"))
+        .args(["run", "build"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("nested-unit"));
+}
+
+#[test]
+fn malformed_workspace_configuration_is_an_error() {
+    let repo = init_repo();
+    write_file(repo.path(), "SCRIPTS", "[build]\nwatch = []\n");
+    write_file(
+        repo.path(),
+        "SCRIPTS_WORKSPACE.toml",
+        "bin_append = \"not-an-array\"\n",
+    );
+
+    scripts_command(&repo)
+        .args(["run", "build"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid workspace configuration"));
+}
+
+#[test]
+fn unknown_workspace_fields_are_an_error() {
+    let repo = init_repo();
+    write_file(repo.path(), "SCRIPTS", "[build]\nwatch = []\n");
+    write_file(
+        repo.path(),
+        "SCRIPTS_WORKSPACE.toml",
+        "bin_apend = [\"tools/bin\"]\n",
+    );
+
+    scripts_command(&repo)
+        .args(["run", "build"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unknown field `bin_apend`"));
+}
+
+#[test]
+fn unknown_task_fields_are_an_error() {
+    let repo = init_repo();
+    write_file(
+        repo.path(),
+        "SCRIPTS",
+        r#"
+[build]
+command = "printf should-not-run"
+wath = []
+"#,
+    );
+
+    scripts_command(&repo)
+        .args(["run", "build"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unknown field `wath`"));
+}
+
+#[test]
+fn workspace_configuration_changes_invalidate_cached_tasks() {
+    let repo = init_repo();
+    for (directory, output) in [("one", "one"), ("two", "two")] {
+        write_file(
+            repo.path(),
+            &format!("tools/{directory}/helper"),
+            &format!("#!/bin/sh\nprintf '{output}\\n'\n"),
+        );
+        make_executable(&repo.path().join(format!("tools/{directory}/helper")));
+    }
+    write_file(
+        repo.path(),
+        "SCRIPTS",
+        "[build]\ncommand = \"helper\"\nwatch = []\n",
+    );
+    write_file(
+        repo.path(),
+        "SCRIPTS_WORKSPACE.toml",
+        "bin_append = [\"tools/one\"]\n",
+    );
+
+    scripts_command(&repo)
+        .args(["run", "build"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("one"));
+
+    write_file(
+        repo.path(),
+        "SCRIPTS_WORKSPACE.toml",
+        "bin_append = [\"tools/two\"]\n",
+    );
+    scripts_command(&repo)
+        .args(["run", "build"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("two"));
+}
+
+#[test]
+fn dependency_resolution_stays_inside_the_git_repository() {
+    let repo = init_repo();
+    let parent = repo.path().parent().expect("repo parent");
+    let outside = tempfile::tempdir_in(parent).expect("create sibling unit");
+    write_file(
+        outside.path(),
+        "SCRIPTS",
+        "[build]\ncommand = \"printf escaped\"\n",
+    );
+    let outside_name = outside
+        .path()
+        .file_name()
+        .expect("outside unit name")
+        .to_string_lossy();
+    write_file(
+        repo.path(),
+        "app/SCRIPTS",
+        &format!("[build]\ndeps = [\"../{outside_name}:build\"]\n"),
+    );
+
+    scripts_command(&repo)
+        .args(["run", "app:build"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "resolves outside the git repository",
+        ));
+}
+
+#[test]
+fn jobs_two_runs_independent_tasks_concurrently() {
+    let repo = init_repo();
+    fs::create_dir(repo.path().join("state")).expect("create state directory");
+    write_file(
+        repo.path(),
+        "SCRIPTS",
+        r#"
+[a]
+command = """
+touch state/a
+attempt=0
+while [ ! -e state/b ] && [ "$attempt" -lt 100 ]; do
+  sleep 0.01
+  attempt=$((attempt + 1))
+done
+test -e state/b
+"""
+
+[b]
+command = """
+touch state/b
+attempt=0
+while [ ! -e state/a ] && [ "$attempt" -lt 100 ]; do
+  sleep 0.01
+  attempt=$((attempt + 1))
+done
+test -e state/a
+"""
+
+[build]
+deps = [":a", ":b"]
+"#,
+    );
+
+    scripts_command(&repo)
+        .args(["run", "--jobs", "2", "build"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn jobs_one_never_overlaps_tasks() {
+    let repo = init_repo();
+    write_file(
+        repo.path(),
+        "SCRIPTS",
+        r#"
+[a]
+command = "mkdir lock; sleep 0.1; rmdir lock"
+
+[b]
+command = "mkdir lock; sleep 0.1; rmdir lock"
+
+[build]
+deps = [":a", ":b"]
+"#,
+    );
+
+    scripts_command(&repo)
+        .args(["run", "--jobs", "1", "build"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn zero_jobs_is_rejected() {
+    let repo = init_repo();
+    write_file(repo.path(), "SCRIPTS", "[build]\n");
+
+    scripts_command(&repo)
+        .args(["run", "--jobs", "0", "build"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid value '0'"));
+}
+
+#[test]
+fn independent_branches_continue_after_a_failure() {
+    let repo = init_repo();
+    write_file(
+        repo.path(),
+        "SCRIPTS",
+        r#"
+[fail]
+command = "exit 7"
+
+[independent]
+command = "printf ran > independent-ran"
+
+[build]
+deps = [":fail", ":independent"]
+"#,
+    );
+
+    scripts_command(&repo)
+        .args(["run", "--jobs", "1", "build"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("FAIL").and(predicate::str::contains("SKIP")));
+    assert!(repo.path().join("independent-ran").is_file());
+}
+
+#[test]
+fn concurrent_runs_keep_each_tasks_cache_entry() {
+    let repo = init_repo();
+    write_file(
+        repo.path(),
+        "SCRIPTS",
+        r#"
+[a]
+command = "sleep 0.1; printf 'a\n'"
+watch = []
+
+[b]
+command = "sleep 0.2; printf 'b\n'"
+watch = []
+"#,
+    );
+
+    let mut a = scripts_command(&repo)
+        .args(["run", "a"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start task a");
+    let mut b = scripts_command(&repo)
+        .args(["run", "b"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start task b");
+    assert!(a.wait().expect("wait for task a").success());
+    assert!(b.wait().expect("wait for task b").success());
+
+    for task in ["a", "b"] {
+        scripts_command(&repo)
+            .args(["run", task])
+            .assert()
+            .success()
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::contains("CACHED"));
+    }
+}
+
+#[test]
+fn concurrent_success_cannot_restore_a_failed_tasks_cache_entry() {
+    let repo = init_repo();
+    write_file(
+        repo.path(),
+        "SCRIPTS",
+        r#"
+[a]
+command = "test ! -e fail"
+watch = []
+
+[b]
+command = "sleep 0.4"
+watch = []
+"#,
+    );
+    scripts_command(&repo).args(["run", "a"]).assert().success();
+    write_file(repo.path(), "fail", "");
+
+    let mut b = scripts_command(&repo)
+        .args(["run", "--force", "b"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start task b");
+    thread::sleep(Duration::from_millis(50));
+    scripts_command(&repo)
+        .args(["run", "--force", "a"])
+        .assert()
+        .failure();
+    assert!(b.wait().expect("wait for task b").success());
+
+    scripts_command(&repo)
+        .args(["run", "a"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("FAIL"));
+}
+
+#[test]
+fn watch_mode_adds_new_dependency_roots() {
+    let repo = init_repo();
+    write_file(repo.path(), "app/input", "first\n");
+    write_file(
+        repo.path(),
+        "app/SCRIPTS",
+        r#"
+[build]
+command = "printf 'app\n' >> ../app-runs"
+watch = ["input", "SCRIPTS"]
+"#,
+    );
+    write_file(repo.path(), "dep/input", "first\n");
+    write_file(repo.path(), "block-dependency", "");
+    write_file(
+        repo.path(),
+        "dep/SCRIPTS",
+        r#"
+[build]
+command = "printf 'attempt\n' >> ../dep-attempts; test ! -e ../block-dependency; printf 'dep\n' >> ../dep-runs"
+watch = ["input"]
+"#,
+    );
+
+    let mut child = scripts_command(&repo)
+        .args(["run", "--watch", "app:build"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start watch mode");
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        wait_until("initial app run", Duration::from_secs(5), || {
+            line_count(&repo.path().join("app-runs")) == 1
+        });
+        thread::sleep(Duration::from_millis(750));
+
+        write_file(
+            repo.path(),
+            "app/SCRIPTS",
+            r#"
+[build]
+deps = ["dep:build"]
+command = "printf 'app\n' >> ../app-runs"
+watch = ["input", "SCRIPTS"]
+"#,
+        );
+        wait_until("failed new dependency run", Duration::from_secs(5), || {
+            line_count(&repo.path().join("dep-attempts")) >= 1
+        });
+        thread::sleep(Duration::from_millis(750));
+
+        fs::remove_file(repo.path().join("block-dependency")).expect("unblock dependency");
+        write_file(repo.path(), "dep/input", "second\n");
+        wait_until("new dependency root change", Duration::from_secs(5), || {
+            line_count(&repo.path().join("dep-runs")) >= 1
+                && line_count(&repo.path().join("app-runs")) >= 2
+        });
+    }));
+
+    child.kill().expect("stop watch mode");
+    child.wait().expect("wait for watch mode");
+    if let Err(payload) = result {
+        std::panic::resume_unwind(payload);
+    }
 }

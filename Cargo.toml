@@ -2,7 +2,7 @@
 name = "scripts_runner"
 version = "0.1.0"
 edition = "2021"
-description = "Pragmatic monorepo task runner with dependency graphs and content-aware caching."
+description = "Parallel monorepo task runner with dependency graphs and content-aware caching."
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/mbullington/scripts"
@@ -35,7 +35,6 @@ anyhow = "1.0.86"
 thiserror = "1.0.61"
 
 # Misc
-dagrs = "0.2.0"
 ignore = "0.4.23"
 hex = "0.4"
 colored = "2"

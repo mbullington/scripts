@@ -4,11 +4,7 @@ use anyhow::Result;
 use serde::Serialize;
 use termtree::Tree;
 
-use crate::helpers::{
-    git::get_git_root,
-    graph::{build_task_graph, TaskGraph},
-    resolve::parse_target,
-};
+use crate::helpers::graph::{build_target_graph, TaskGraph};
 
 fn get_tree(graph: &TaskGraph, handle: usize, relative_to: &Path) -> Tree<String> {
     let node = &graph.scripts[handle];
@@ -63,10 +59,8 @@ fn get_flat(
 }
 
 pub fn cmd_print_tree_command(target: &str, json: bool, flat: bool) -> Result<()> {
-    let (unit, task) = parse_target(target)?;
-    let unit_path = Path::new(&unit);
-    let git_root = get_git_root(unit_path)?;
-    let graph: TaskGraph = build_task_graph(unit_path, &task)?;
+    let cwd = std::env::current_dir()?;
+    let (graph, git_root) = build_target_graph(target, &cwd)?;
     let root_handle = graph.root;
     if flat {
         let mut set = std::collections::BTreeSet::new();

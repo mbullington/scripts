@@ -14,7 +14,8 @@ to be appended to *PATH* for every task through *bin_append*.
 
 # FORMAT
 
-A workspace file is regular UTF-8 TOML.
+A workspace file is regular UTF-8 TOML. Unknown keys, malformed values, and
+unreadable files are errors.
 
 # KEYS
 
@@ -42,11 +43,11 @@ bin_append = [
 ]
 ```
 
-### path
+*path*
 
 Relative path to a directory that should be prepended to *PATH*.
 
-### relative_to
+*relative_to*
 
 How the entry should be resolved.
 
@@ -87,6 +88,9 @@ bin_append = [
 
 Workspace bins are appended after task-local and dependency-provided *bin*
 entries, so local task configuration still wins.
+
+The workspace configuration is part of each cacheable task's fingerprint.
+Changing *bin_append* therefore invalidates cached tasks.
 
 # SEE ALSO
 

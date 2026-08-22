@@ -1,10 +1,10 @@
 
 # scripts
 
-A pragmatic monorepo task runner with content-aware caching and watch mode.
+A parallel monorepo task runner with content-aware caching and watch mode.
 
 - simple TOML configuration
-- dependency graphs across units and languages
+- bounded parallel execution of dependency graphs
 - content-aware caching
 - watch mode for development workflows
 - no daemon, no remote service, intentionally non-hermetic
@@ -44,6 +44,7 @@ scripts run :build
 scripts run :test
 scripts run :build --force
 scripts run :build --watch
+scripts run --jobs 4 :test
 ```
 
 ## Task fields
@@ -55,6 +56,8 @@ scripts run :build --watch
   - `[]`: hash only the command text
   - non-empty list: hash command text plus watched file contents
 - `bin`: optional list of paths added to `PATH` for the task and its dependents
+
+Unknown task fields are errors, so misspelled keys cannot silently change task behavior.
 
 ## Workspace configuration
 
@@ -74,6 +77,8 @@ bin_append = [
 ]
 ```
 
+Malformed workspace configuration and unknown fields are errors.
+
 ## Commands
 
 ### `scripts run [OPTIONS] <TARGET> [-- ARGS...]`
@@ -85,15 +90,19 @@ scripts run app:build
 scripts run build
 scripts run :build --watch
 scripts run dev -- echo done
+scripts run --jobs 4 app:build
 scripts run --force tools/pkg:build
 scripts run --quiet app:build
 scripts run --verbose app:build
 ```
 
 Notes:
-- use `app:build` for another unit, or `build` / `:build` for the current unit
+- use `app:build` for another unit, or `build` / `:build` for the nearest enclosing unit
+- independent tasks run concurrently; `--jobs N` sets the limit, which defaults to the logical CPU count
+- a failed task skips its dependents, while independent branches continue
 - anything after `--` is appended to the root task command and becomes part of the cache key
 - `--watch` starts after the graph finishes, then re-runs the target graph when watched inputs change
+- watch mode updates its watched units when the dependency graph changes
 - `--quiet` suppresses routine task status lines but still streams task output
 - `--verbose` shows the working directory and shell command for each task
 - task status lines are written to stderr so stdout stays usable for task output
@@ -121,7 +130,7 @@ scripts print-tree app:test --json
 
 ### `scripts clean [PATH]`
 
-Remove the repository cache file.
+Remove the repository cache directory.
 
 ```sh
 scripts clean
@@ -145,11 +154,11 @@ Supported shells: `bash`, `elvish`, `fish`, `powershell`, `zsh`.
 ## Target syntax
 
 - `<unit>:<task>` — run a specific task in another unit
-- `<task>` — run a task in the current unit
-- `:<task>` — also run a task in the current unit
+- `<task>` — run a task in the nearest enclosing unit
+- `:<task>` — also run a task in the nearest enclosing unit
 
-If you provide a path-like target without a task name, `scripts` will ask for
-`<unit>:<task>` explicitly.
+Target parsing does not inspect the filesystem. A plain name is always a task;
+use the colon form to name another unit.
 
 ## Manual pages
 
@@ -190,11 +199,12 @@ Units are directories containing a `SCRIPTS` file.
 
 Dependencies resolve by searching upward from the depending unit toward the git root:
 
-- `(unit root)/..`
-- `(unit root)/../..`
-- and so on until `(git root)`
+- `(unit root)/<dependency path>`
+- `(unit root)/../<dependency path>`
+- and so on through `(git root)/<dependency path>`
 
-The first matching path that contains a `SCRIPTS` file wins.
+The first matching path that contains a `SCRIPTS` file wins. Resolved units must
+remain inside the git repository.
 
 ## Cache behavior
 
@@ -203,11 +213,20 @@ For each task with `watch` present, `scripts` hashes:
 - a cache format version
 - the task command text
 - dependency, `bin`, and `watch` declarations
+- workspace `bin_append` configuration
 - the contents of any watched files
 
-The repository `.scripts_cache` file is ignored when hashing watched files, so broad patterns like `watch = ["."]` do not invalidate themselves.
+The repository `.scripts_cache/` directory stores one atomic entry per task and
+is ignored when hashing watched files. Separate entries let concurrent
+invocations update different tasks without overwriting each other.
 
 A task is cached only when its own hash matches and none of its dependencies had to rerun.
+
+## Agent skill
+
+The repository owns an agent reference at
+[`skills/scripts-runner/SKILL.md`](skills/scripts-runner/SKILL.md). Keep it in
+sync with CLI and configuration changes.
 
 ## Non-goals
 

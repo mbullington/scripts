@@ -1,13 +1,24 @@
-use std::{collections::HashMap, fs::File, io::Read, path::Path};
+use std::{
+    fs::{File, OpenOptions},
+    io::{ErrorKind, Read, Write},
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use anyhow::Result;
 use ignore::{overrides::OverrideBuilder, WalkBuilder};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::helpers::graph::TaskGraphNode;
+use crate::helpers::{graph::TaskGraphNode, scripts_def::WorkspaceConfig};
 
-const CACHE_FORMAT_VERSION: &str = "scripts-cache-v2";
+const CACHE_FORMAT_VERSION: &str = "scripts-cache-v3";
+static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug)]
+pub struct TaskCache {
+    root: PathBuf,
+}
 
 #[derive(Serialize)]
 struct TaskFingerprint<'a> {
@@ -17,22 +28,84 @@ struct TaskFingerprint<'a> {
     bin: Option<&'a [String]>,
     watch: &'a [String],
     watch_hashes: Vec<String>,
+    workspace: Option<&'a WorkspaceConfig>,
 }
 
-pub fn load_cache(path: &Path) -> Result<HashMap<String, String>> {
-    if path.exists() {
-        Ok(serde_json::from_str(&std::fs::read_to_string(path)?)?)
-    } else {
-        Ok(HashMap::new())
+impl TaskCache {
+    pub fn open(git_root: &Path) -> Result<Self> {
+        let root = git_root.join(".scripts_cache");
+        if root.is_file() {
+            match std::fs::remove_file(&root) {
+                Ok(()) => {}
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(Self { root })
+    }
+
+    pub fn get(&self, key: &str) -> Result<Option<String>> {
+        let path = self.entry_path(key);
+        match std::fs::read_to_string(path) {
+            Ok(value) => Ok(Some(value)),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    pub fn store(&self, key: &str, value: &str) -> Result<()> {
+        std::fs::create_dir_all(&self.root)?;
+
+        let path = self.entry_path(key);
+        let sequence = TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let temp_path = self.root.join(format!(
+            ".{}.{}.{}.tmp",
+            cache_file_name(key),
+            std::process::id(),
+            sequence
+        ));
+
+        let result = (|| {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temp_path)?;
+            file.write_all(value.as_bytes())?;
+            file.sync_all()?;
+            std::fs::rename(&temp_path, path)?;
+            Ok(())
+        })();
+
+        if result.is_err() {
+            let _ = std::fs::remove_file(temp_path);
+        }
+        result
+    }
+
+    pub fn remove(&self, key: &str) -> Result<()> {
+        match std::fs::remove_file(self.entry_path(key)) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn entry_path(&self, key: &str) -> PathBuf {
+        self.root.join(cache_file_name(key))
     }
 }
 
-pub fn save_cache(path: &Path, cache: &HashMap<String, String>) -> Result<()> {
-    std::fs::write(path, serde_json::to_string(cache)?)?;
-    Ok(())
+fn cache_file_name(key: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(key.as_bytes());
+    hex::encode(hasher.finalize())
 }
 
-pub fn compute_task_hash(node: &TaskGraphNode, command: Option<&str>) -> Result<Option<String>> {
+pub fn compute_task_hash(
+    node: &TaskGraphNode,
+    command: Option<&str>,
+    workspace_config: Option<&WorkspaceConfig>,
+) -> Result<Option<String>> {
     let Some(patterns) = &node.task.watch else {
         return Ok(None);
     };
@@ -48,6 +121,7 @@ pub fn compute_task_hash(node: &TaskGraphNode, command: Option<&str>) -> Result<
         bin: node.task.bin.as_deref(),
         watch: patterns,
         watch_hashes,
+        workspace: workspace_config,
     };
 
     let mut hasher = Sha256::new();
@@ -72,7 +146,9 @@ fn hash_file(path: &Path) -> Result<[u8; 32]> {
 }
 
 fn should_skip_watch_entry(relative_path: &str) -> bool {
-    relative_path == ".scripts_cache" || relative_path.starts_with(".git/")
+    relative_path == ".scripts_cache"
+        || relative_path.starts_with(".scripts_cache/")
+        || relative_path.starts_with(".git/")
 }
 
 fn compute_watch_hash(root: &Path, pattern: &str) -> Result<String> {

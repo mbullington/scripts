@@ -9,6 +9,7 @@ pub struct ScriptsDef {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct Task {
     pub deps: Option<Vec<String>>,
     pub command: Option<String>,
@@ -29,6 +30,7 @@ pub enum RelativeTo {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct BinAppendObject {
     pub path: String,
     pub relative_to: RelativeTo,
@@ -42,6 +44,7 @@ pub enum BinAppendEntry {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct WorkspaceConfig {
     /// Paths that should be appended to PATH for all tasks.
     pub bin_append: Option<Vec<BinAppendEntry>>,
