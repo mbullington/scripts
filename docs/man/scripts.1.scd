@@ -8,7 +8,7 @@ scripts - pragmatic monorepo task runner with content-aware caching
 
 ```
 scripts
-scripts run [--force] [--quiet | --verbose] [--watch] target [-- args...]
+scripts run [--force] [--quiet | --verbose] [--watch] [--jobs n] target [-- args...]
 scripts env target
 scripts print-tree [--json] [--flat] target
 scripts clean [path]
@@ -36,7 +36,7 @@ from the nearest enclosing unit, if one can be found.
 Run a task and its dependencies.
 
 ```
-scripts run [--force] [--quiet | --verbose] [--watch] target [-- args...]
+scripts run [--force] [--quiet | --verbose] [--watch] [--jobs n] target [-- args...]
 ```
 
 If arguments are provided after *--*, they are appended to the root task's
@@ -47,9 +47,14 @@ Use *--force* to ignore cached results and execute the task graph again.
 Use *--quiet* to suppress routine task status lines. Use *--verbose* to print
 each task's working directory and shell command before execution.
 
+Independent tasks run concurrently. Use *--jobs n* to limit concurrent tasks.
+The default is the number of logical CPUs. A failed task skips its dependents;
+independent branches continue.
+
 Use *--watch* to run the graph once, then monitor watched units and re-run the
-target graph when changes are detected. Watch mode starts after the graph
-finishes; it does not supervise long-running processes.
+target graph when changes are detected. Watch mode updates its monitored units
+when the dependency graph changes. It starts after the graph finishes and does
+not supervise long-running processes.
 
 ## env
 
@@ -78,7 +83,7 @@ Use *--json* for structured output or *--flat* for a deduplicated list.
 
 ## clean
 
-Remove the repository cache file.
+Remove the repository cache directory.
 
 ```
 scripts clean [path]
@@ -104,8 +109,8 @@ Supported shells include *bash*, *elvish*, *fish*, *powershell*, and *zsh*.
 Use one of these forms:
 
 - *<unit>:<task>* for a task in another unit
-- *<task>* for a task in the current unit
-- *:<task>* also for a task in the current unit
+- *<task>* for a task in the nearest enclosing unit
+- *:<task>* also for a task in the nearest enclosing unit
 
 The unit portion names a directory containing a *SCRIPTS*(5) file. The task
 portion names one top-level task table in that file.
@@ -116,8 +121,8 @@ Examples:
 - *test*
 - *:test*
 
-If a path-like target is provided without *:<task>*, *scripts* reports an error
-and asks for the explicit *<unit>:<task>* form.
+Target parsing does not inspect the filesystem. A plain name always identifies
+a task; use the colon form to identify another unit.
 
 # CACHING
 
@@ -131,14 +136,17 @@ Caching behaves as follows:
 - non-empty *watch* list: hash the command text plus watched file contents
 
 A task is considered cached only when its own hash matches the stored value and
-none of its dependencies had to rerun.
+none of its dependencies had to rerun. Workspace *bin_append* configuration is
+part of the hash. Cache entries are stored and replaced independently so
+concurrent *scripts* processes cannot overwrite another task's entry.
 
 # WATCH MODE
 
 *--watch* runs the requested task graph once, then monitors the units
 participating in that graph and re-runs the graph when changes are detected.
-Watch mode starts after the graph finishes; long-running process supervision is
-left to the task command or dedicated tools.
+After each run, it updates registrations for units added to or removed from the
+graph. Watch mode starts after the graph finishes; long-running process
+supervision is left to the task command or dedicated tools.
 
 # EXAMPLES
 
@@ -158,6 +166,12 @@ Append an inline command fragment to the root task:
 
 ```
 scripts run :dev -- echo done
+```
+
+Limit execution to four concurrent tasks:
+
+```
+scripts run --jobs 4 app:build
 ```
 
 Force a rerun even when inputs are unchanged:
@@ -227,15 +241,15 @@ scripts completions bash > ~/.local/share/bash-completion/completions/scripts
 *SCRIPTS_WORKSPACE.toml*
 	Optional workspace configuration. See *SCRIPTS_WORKSPACE.toml*(5).
 
-*.scripts_cache*
-	JSON cache file stored at the git repository root.
+*.scripts_cache/*
+	Directory of per-task cache entries stored at the git repository root.
 
 # EXIT STATUS
 
 *0* on success.
 
 *1* if command-line parsing fails, a target cannot be resolved, a task command
-fails, or a *SCRIPTS*(5) file is invalid.
+fails, or a task or workspace configuration file is invalid.
 
 # NOTES
 

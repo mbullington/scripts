@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{bail, Result as AnyhowResult};
+use anyhow::{Context, Result as AnyhowResult};
 
 use crate::helpers::scripts_def::{ScriptsDef, WorkspaceConfig};
 
@@ -30,7 +30,10 @@ pub fn resolve_scripts_path(
     path: &str,
     working_dir: &Path,
 ) -> Result<PathBuf, ResolveScriptsError> {
-    let git_root = get_git_root(working_dir).map_err(ResolveScriptsError::GitError)?;
+    let git_root = get_git_root(working_dir)
+        .map_err(ResolveScriptsError::GitError)?
+        .canonicalize()
+        .map_err(ResolveScriptsError::IO)?;
 
     let mut current_dir = PathBuf::from(working_dir)
         .canonicalize()
@@ -38,7 +41,13 @@ pub fn resolve_scripts_path(
     loop {
         let candidate = current_dir.join(path);
         if candidate.join("SCRIPTS").is_file() {
-            return candidate.canonicalize().map_err(ResolveScriptsError::IO);
+            let candidate = candidate.canonicalize().map_err(ResolveScriptsError::IO)?;
+            if !candidate.starts_with(&git_root) {
+                return Err(ResolveScriptsError::InvalidTarget(format!(
+                    "unit path '{path}' resolves outside the git repository"
+                )));
+            }
+            return Ok(candidate);
         }
 
         if current_dir == git_root {
@@ -52,6 +61,31 @@ pub fn resolve_scripts_path(
     }
 
     Err(ResolveScriptsError::DoesNotExist("Unit not found"))
+}
+
+pub fn find_enclosing_unit(
+    working_dir: &Path,
+    git_root: &Path,
+) -> Result<PathBuf, ResolveScriptsError> {
+    let git_root = git_root.canonicalize().map_err(ResolveScriptsError::IO)?;
+    let mut current = working_dir
+        .canonicalize()
+        .map_err(ResolveScriptsError::IO)?;
+
+    while current.starts_with(&git_root) {
+        if current.join("SCRIPTS").is_file() {
+            return Ok(current);
+        }
+        if current == git_root {
+            break;
+        }
+        let Some(parent) = current.parent() else {
+            break;
+        };
+        current = parent.to_path_buf();
+    }
+
+    Err(ResolveScriptsError::DoesNotExist("SCRIPTS file not found"))
 }
 
 pub fn read_scripts(path: &Path) -> Result<ScriptsDef, ResolveScriptsError> {
@@ -95,32 +129,17 @@ fn split_explicit_target(target: &str) -> std::result::Result<Option<(&str, &str
     Ok(None)
 }
 
-fn looks_like_unit_path(target: &str) -> bool {
-    target.contains('/')
-        || target == "."
-        || target == ".."
-        || target.starts_with("./")
-        || target.starts_with("../")
-        || Path::new(target).exists()
-}
-
 /// Split a CLI task target into the unit path and task name.
 pub fn parse_target(target: &str) -> AnyhowResult<(String, String)> {
     if let Some((path, task)) = split_explicit_target(target).map_err(|()| {
         anyhow::anyhow!(
-            "invalid target '{target}'. Missing task name after ':'. Use 'build' for the current unit or '<unit>:build' for another unit"
+            "invalid target '{target}'. Missing task name after ':'. Use 'build' for the nearest enclosing unit or '<unit>:build' for another unit"
         )
     })? {
         return Ok((
             if path.is_empty() { "." } else { path }.to_string(),
             task.to_string(),
         ));
-    }
-
-    if looks_like_unit_path(target) {
-        bail!(
-            "invalid target '{target}'. Units must include a task name. Use '<unit>:<task>' for another unit or '<task>' for the current unit"
-        );
     }
 
     Ok((".".to_string(), target.to_string()))
@@ -136,23 +155,27 @@ pub fn parse_dependency(dep: &str) -> Result<(String, String), ResolveScriptsErr
         return Ok((path.to_string(), task.to_string()));
     }
 
-    if looks_like_unit_path(dep) {
-        return Err(ResolveScriptsError::InvalidTarget(format!(
-            "invalid dependency '{dep}'. Use '<unit>:<task>' for another unit or '<task>' for the current unit"
-        )));
-    }
-
     Ok((String::new(), dep.to_string()))
 }
 
-pub fn read_workspace_config(git_root: &Path) -> Option<WorkspaceConfig> {
+pub fn read_workspace_config(git_root: &Path) -> AnyhowResult<Option<WorkspaceConfig>> {
     let workspace_path = git_root.join("SCRIPTS_WORKSPACE.toml");
-    if !workspace_path.is_file() {
-        return None;
+    if !workspace_path
+        .try_exists()
+        .with_context(|| format!("failed to inspect {}", workspace_path.display()))?
+    {
+        return Ok(None);
     }
 
-    let contents = read_to_string(workspace_path).ok()?;
-    toml::from_str(&contents).ok()
+    let contents = read_to_string(&workspace_path)
+        .with_context(|| format!("failed to read {}", workspace_path.display()))?;
+    let config = toml::from_str(&contents).with_context(|| {
+        format!(
+            "invalid workspace configuration in {}",
+            workspace_path.display()
+        )
+    })?;
+    Ok(Some(config))
 }
 
 #[cfg(test)]
@@ -174,8 +197,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_target_rejects_path_like_targets_without_task_names() {
-        assert!(parse_target("./tools/pkg").is_err());
-        assert!(parse_target("..").is_err());
+    fn parse_target_treats_path_like_names_as_current_unit_tasks() {
+        assert_eq!(
+            parse_target("./tools/pkg").unwrap(),
+            (".".into(), "./tools/pkg".into())
+        );
+        assert_eq!(parse_target("..").unwrap(), (".".into(), "..".into()));
     }
 }

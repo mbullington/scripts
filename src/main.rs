@@ -1,7 +1,7 @@
 #[cfg(not(unix))]
 compile_error!("scripts currently supports Unix-like environments (macOS and Linux) only.");
 
-use std::io;
+use std::{io, num::NonZeroUsize};
 
 use clap::{CommandFactory, Parser};
 use clap_complete::{generate, Shell};
@@ -12,9 +12,9 @@ use crate::helpers::task_list::print_tasks_for_current_unit;
 mod commands;
 mod helpers;
 
-const ROOT_AFTER_HELP: &str = "Examples:\n  scripts run app:build\n  scripts run build\n  scripts run :build --watch\n  scripts print-tree app:test --json\n  scripts env dev\n  scripts completions bash > ~/.local/share/bash-completion/completions/scripts\n\nTarget syntax:\n  <unit>:<task>   Run a specific task in another unit\n  <task>          Run a task in the current unit\n  :<task>         Also run a task in the current unit";
+const ROOT_AFTER_HELP: &str = "Examples:\n  scripts run app:build\n  scripts run build\n  scripts run :build --watch\n  scripts print-tree app:test --json\n  scripts env dev\n  scripts completions bash > ~/.local/share/bash-completion/completions/scripts\n\nTarget syntax:\n  <unit>:<task>   Run a specific task in another unit\n  <task>          Run a task in the nearest enclosing unit\n  :<task>         Also run a task in the nearest enclosing unit";
 
-const RUN_AFTER_HELP: &str = "Examples:\n  scripts run app:build\n  scripts run build\n  scripts run :build --watch\n  scripts run dev -- echo done\n  scripts run --force tools/pkg:build\n  scripts run --quiet app:build\n  scripts run --verbose app:build";
+const RUN_AFTER_HELP: &str = "Examples:\n  scripts run app:build\n  scripts run build\n  scripts run :build --watch\n  scripts run dev -- echo done\n  scripts run --jobs 4 app:build\n  scripts run --force tools/pkg:build\n  scripts run --quiet app:build\n  scripts run --verbose app:build";
 
 const ENV_AFTER_HELP: &str = "Examples:\n  scripts env app:dev\n  scripts env dev";
 
@@ -27,12 +27,12 @@ const COMPLETIONS_AFTER_HELP: &str = "Examples:\n  scripts completions bash > ~/
 #[derive(Debug, Parser)]
 #[command(name = "scripts")]
 #[command(version)]
-#[command(about = "A pragmatic monorepo task runner with content-aware caching.")]
+#[command(about = "A parallel monorepo task runner with content-aware caching.")]
 #[command(after_help = ROOT_AFTER_HELP)]
 enum Cli {
     /// Run a task and its dependencies.
     Run(RunArgs),
-    /// Remove the repository cache file.
+    /// Remove the repository cache directory.
     Clean(CleanArgs),
     /// Start a shell with PATH prepared for a task.
     Env(EnvArgs),
@@ -48,7 +48,7 @@ enum Cli {
 #[command(after_help = RUN_AFTER_HELP)]
 struct RunArgs {
     #[arg(value_name = "TARGET")]
-    /// Task target. Use <unit>:<task> for another unit or <task> for the current unit.
+    /// Task target. Use <unit>:<task> for another unit or <task> for the nearest enclosing unit.
     target: String,
     /// Ignore cached results and run even if inputs are unchanged.
     #[arg(long)]
@@ -62,13 +62,16 @@ struct RunArgs {
     /// Watch for changes and re-run the target graph.
     #[arg(long)]
     watch: bool,
+    /// Maximum number of tasks to run concurrently. Defaults to the logical CPU count.
+    #[arg(short = 'j', long, value_name = "N")]
+    jobs: Option<NonZeroUsize>,
     /// Append an inline shell fragment to the root task after `--`.
     #[arg(trailing_var_arg = true, value_name = "ARGS")]
     args: Vec<String>,
 }
 
 #[derive(Debug, clap::Args)]
-#[command(about = "Remove the repository cache file.")]
+#[command(about = "Remove the repository cache directory.")]
 #[command(after_help = CLEAN_AFTER_HELP)]
 struct CleanArgs {
     #[arg(default_value = ".", value_name = "PATH")]
@@ -81,7 +84,7 @@ struct CleanArgs {
 #[command(after_help = ENV_AFTER_HELP)]
 struct EnvArgs {
     #[arg(value_name = "TARGET")]
-    /// Task target. Use <unit>:<task> for another unit or <task> for the current unit.
+    /// Task target. Use <unit>:<task> for another unit or <task> for the nearest enclosing unit.
     target: String,
 }
 
@@ -90,7 +93,7 @@ struct EnvArgs {
 #[command(after_help = PRINT_TREE_AFTER_HELP)]
 struct PrintTreeArgs {
     #[arg(value_name = "TARGET")]
-    /// Task target. Use <unit>:<task> for another unit or <task> for the current unit.
+    /// Task target. Use <unit>:<task> for another unit or <task> for the nearest enclosing unit.
     target: String,
     /// Emit JSON instead of human-readable text.
     #[arg(long)]
@@ -132,6 +135,7 @@ fn main() {
                 args.quiet,
                 args.verbose,
                 args.watch,
+                args.jobs,
                 appended,
             )
         }
@@ -145,7 +149,7 @@ fn main() {
         }
     };
     if let Err(e) = result {
-        eprintln!("error: {e}");
+        eprintln!("error: {e:#}");
         std::process::exit(1);
     }
 }

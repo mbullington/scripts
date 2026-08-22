@@ -1,8 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::{collections::VecDeque, sync::mpsc, thread};
 
 use anyhow::Result;
 use colored::*;
-use dagrs::{log as daglog, Action, Dag, DefaultTask, EnvVar, Input, LogLevel, Output, Task};
 
 use super::run_plan::{PlanEntry, RunPlan};
 
@@ -26,6 +25,7 @@ impl RunOutputMode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TaskState {
     Pending,
+    Running,
     Cached,
     Succeeded,
     Failed,
@@ -47,16 +47,14 @@ pub enum TaskEvent {
 pub struct ExecutionOutcome {
     pub events: Vec<TaskEvent>,
     pub states: Vec<TaskState>,
-    dag_failed: bool,
 }
 
 impl ExecutionOutcome {
     pub fn into_result(self) -> Result<()> {
-        if self.dag_failed
-            || self
-                .states
-                .iter()
-                .any(|state| matches!(state, TaskState::Failed | TaskState::Skipped))
+        if self
+            .states
+            .iter()
+            .any(|state| !matches!(state, TaskState::Cached | TaskState::Succeeded))
         {
             anyhow::bail!("one or more tasks failed");
         }
@@ -65,134 +63,210 @@ impl ExecutionOutcome {
     }
 }
 
-struct RunAction {
-    entry: PlanEntry,
-    output_mode: RunOutputMode,
-    states: Arc<Mutex<Vec<TaskState>>>,
-    events: Arc<Mutex<Vec<TaskEvent>>>,
+struct CommandCompletion {
+    index: usize,
+    result: std::io::Result<std::process::ExitStatus>,
 }
 
-pub fn execute_plan(plan: &RunPlan, output_mode: RunOutputMode) -> ExecutionOutcome {
-    daglog::init_logger(LogLevel::Off, None);
+struct Scheduler<'a> {
+    plan: &'a RunPlan,
+    output_mode: RunOutputMode,
+    states: Vec<TaskState>,
+    events: Vec<TaskEvent>,
+    remaining_dependencies: Vec<usize>,
+    dependents: Vec<Vec<usize>>,
+    ready: VecDeque<usize>,
+}
 
-    let states = Arc::new(Mutex::new(vec![TaskState::Pending; plan.entries.len()]));
-    let events = Arc::new(Mutex::new(Vec::new()));
-    let mut dag_tasks = Vec::with_capacity(plan.entries.len());
-
-    for entry in &plan.entries {
-        let action = RunAction {
-            entry: entry.clone(),
-            output_mode,
-            states: states.clone(),
-            events: events.clone(),
-        };
-        dag_tasks.push(DefaultTask::new(action, &entry.name));
-    }
-
-    for entry in &plan.entries {
-        let dep_ids: Vec<usize> = entry
-            .dependencies
+impl<'a> Scheduler<'a> {
+    fn new(plan: &'a RunPlan, output_mode: RunOutputMode) -> Self {
+        let remaining_dependencies: Vec<usize> = plan
+            .entries
             .iter()
-            .map(|&handle| dag_tasks[handle].id())
+            .map(|entry| entry.dependencies.len())
             .collect();
-        dag_tasks[entry.index].set_predecessors_by_id(&dep_ids);
+        let mut dependents = vec![Vec::new(); plan.entries.len()];
+        for entry in &plan.entries {
+            for dependency in &entry.dependencies {
+                dependents[*dependency].push(entry.index);
+            }
+        }
+        let ready = remaining_dependencies
+            .iter()
+            .enumerate()
+            .filter_map(|(index, remaining)| (*remaining == 0).then_some(index))
+            .collect();
+
+        Self {
+            plan,
+            output_mode,
+            states: vec![TaskState::Pending; plan.entries.len()],
+            events: Vec::new(),
+            remaining_dependencies,
+            dependents,
+            ready,
+        }
     }
 
-    let mut dag = Dag::with_tasks(dag_tasks);
-    let dag_failed = dag.start().is_err();
+    fn next_ready(&mut self) -> Option<usize> {
+        while let Some(index) = self.ready.pop_front() {
+            if self.states[index] == TaskState::Pending {
+                return Some(index);
+            }
+        }
+        None
+    }
 
-    let mut states = states.lock().unwrap().clone();
-    for entry in &plan.entries {
-        if entry.should_run && states[entry.index] == TaskState::Pending {
-            states[entry.index] = TaskState::Skipped;
+    fn complete_cached(&mut self, index: usize) {
+        self.states[index] = TaskState::Cached;
+        print_status(
+            self.output_mode,
+            "CACHED",
+            &self.plan.entries[index].name,
+            None,
+        );
+        self.release_dependents(index);
+    }
+
+    fn complete_success(&mut self, index: usize) {
+        let entry = &self.plan.entries[index];
+        self.states[index] = TaskState::Succeeded;
+        self.events.push(TaskEvent::Succeeded {
+            cache_key: entry.cache_key.clone(),
+            cache_hash: entry.cache_hash.clone(),
+        });
+        print_status(self.output_mode, "OK", &entry.name, None);
+        self.release_dependents(index);
+    }
+
+    fn complete_failure(&mut self, index: usize, detail: &str) {
+        let entry = &self.plan.entries[index];
+        self.states[index] = TaskState::Failed;
+        self.events.push(TaskEvent::Failed {
+            cache_key: entry.cache_key.clone(),
+        });
+        print_status(self.output_mode, "FAIL", &entry.name, Some(detail));
+        self.skip_dependents(index);
+    }
+
+    fn release_dependents(&mut self, index: usize) {
+        for dependent in &self.dependents[index] {
+            if self.states[*dependent] != TaskState::Pending {
+                continue;
+            }
+            self.remaining_dependencies[*dependent] -= 1;
+            if self.remaining_dependencies[*dependent] == 0 {
+                self.ready.push_back(*dependent);
+            }
+        }
+    }
+
+    fn skip_dependents(&mut self, index: usize) {
+        for dependent in self.dependents[index].clone() {
+            if self.states[dependent] != TaskState::Pending {
+                continue;
+            }
+            self.states[dependent] = TaskState::Skipped;
+            self.ready.retain(|queued| *queued != dependent);
             print_status(
-                output_mode,
+                self.output_mode,
                 "SKIP",
-                &entry.name,
+                &self.plan.entries[dependent].name,
                 Some("(dependency failed)"),
             );
+            self.skip_dependents(dependent);
         }
     }
 
-    let events = events.lock().unwrap().clone();
-    ExecutionOutcome {
-        events,
-        states,
-        dag_failed,
+    fn into_outcome(self) -> ExecutionOutcome {
+        ExecutionOutcome {
+            events: self.events,
+            states: self.states,
+        }
     }
 }
 
-impl Action for RunAction {
-    fn run(&self, _input: Input, _env: Arc<EnvVar>) -> Result<Output, dagrs::RunningError> {
-        if !self.entry.should_run {
-            self.set_state(TaskState::Cached);
-            print_status(self.output_mode, "CACHED", &self.entry.name, None);
-            return Ok(Output::empty());
-        }
+pub fn execute_plan(plan: &RunPlan, output_mode: RunOutputMode, jobs: usize) -> ExecutionOutcome {
+    assert!(jobs > 0, "executor requires at least one job");
 
-        let command = match &self.entry.command {
-            Some(command) => command,
-            None => {
-                print_status(
-                    self.output_mode,
-                    "RUN",
-                    &self.entry.name,
-                    Some("(no command)"),
-                );
-                return self.finish_success();
+    let mut scheduler = Scheduler::new(plan, output_mode);
+    let (completion_tx, completion_rx) = mpsc::channel();
+    let mut active = 0;
+
+    thread::scope(|scope| loop {
+        while active < jobs {
+            let Some(index) = scheduler.next_ready() else {
+                break;
+            };
+            let entry = &plan.entries[index];
+
+            if !entry.should_run {
+                scheduler.complete_cached(index);
+                continue;
             }
-        };
 
-        print_status(self.output_mode, "RUN", &self.entry.name, None);
-        print_verbose_command(self.output_mode, &self.entry, command);
+            let Some(command) = entry.command.clone() else {
+                print_status(output_mode, "RUN", &entry.name, Some("(no command)"));
+                scheduler.complete_success(index);
+                continue;
+            };
 
-        use std::process::Stdio;
+            print_status(output_mode, "RUN", &entry.name, None);
+            print_verbose_command(output_mode, entry, &command);
+            scheduler.states[index] = TaskState::Running;
 
-        let status = std::process::Command::new("sh")
-            .args(["-c", command])
-            .current_dir(&self.entry.dir)
-            .env("PATH", &self.entry.path_var)
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .status()
-            .map_err(dagrs::RunningError::from_err)?;
+            let dir = entry.dir.clone();
+            let path_var = entry.path_var.clone();
+            let completion_tx = completion_tx.clone();
+            let spawn_result = thread::Builder::new().spawn_scoped(scope, move || {
+                use std::process::Stdio;
 
-        if status.success() {
-            self.finish_success()
-        } else {
-            self.finish_failure();
-            let exit_code = status.code();
-            let detail = format!("(exit code: {exit_code:?})");
-            print_status(self.output_mode, "FAIL", &self.entry.name, Some(&detail));
-            Err(dagrs::RunningError::new(format!(
-                "task {} failed with exit code {exit_code:?}",
-                self.entry.name
-            )))
+                let result = std::process::Command::new("sh")
+                    .args(["-c", &command])
+                    .current_dir(dir)
+                    .env("PATH", path_var)
+                    .stdout(Stdio::inherit())
+                    .stderr(Stdio::inherit())
+                    .status();
+                let _ = completion_tx.send(CommandCompletion { index, result });
+            });
+
+            match spawn_result {
+                Ok(_) => active += 1,
+                Err(error) => {
+                    scheduler.complete_failure(index, &format!("(failed to start worker: {error})"))
+                }
+            }
         }
-    }
-}
 
-impl RunAction {
-    fn set_state(&self, state: TaskState) {
-        self.states.lock().unwrap()[self.entry.index] = state;
-    }
+        if active == 0 {
+            if scheduler.ready.is_empty() {
+                break;
+            }
+            continue;
+        }
 
-    fn finish_success(&self) -> Result<Output, dagrs::RunningError> {
-        self.set_state(TaskState::Succeeded);
-        self.events.lock().unwrap().push(TaskEvent::Succeeded {
-            cache_key: self.entry.cache_key.clone(),
-            cache_hash: self.entry.cache_hash.clone(),
-        });
-        print_status(self.output_mode, "OK", &self.entry.name, None);
-        Ok(Output::empty())
-    }
+        let completion = completion_rx
+            .recv()
+            .expect("worker completion channel closed unexpectedly");
+        active -= 1;
+        match completion.result {
+            Ok(status) if status.success() => scheduler.complete_success(completion.index),
+            Ok(status) => {
+                let detail = match status.code() {
+                    Some(code) => format!("(exit code: {code})"),
+                    None => "(terminated by signal)".to_string(),
+                };
+                scheduler.complete_failure(completion.index, &detail);
+            }
+            Err(error) => scheduler.complete_failure(
+                completion.index,
+                &format!("(failed to start command: {error})"),
+            ),
+        }
+    });
 
-    fn finish_failure(&self) {
-        self.set_state(TaskState::Failed);
-        self.events.lock().unwrap().push(TaskEvent::Failed {
-            cache_key: self.entry.cache_key.clone(),
-        });
-    }
+    scheduler.into_outcome()
 }
 
 fn status_label(label: &str) -> colored::ColoredString {

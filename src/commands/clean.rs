@@ -8,7 +8,10 @@ pub fn cmd_clean_command(target: &str) -> Result<()> {
     let git_root = get_git_root(Path::new(target))?;
     let cache_path = git_root.join(".scripts_cache");
 
-    if cache_path.exists() {
+    if cache_path.is_dir() {
+        std::fs::remove_dir_all(&cache_path)?;
+        println!("removed {}", cache_path.display());
+    } else if cache_path.is_file() {
         std::fs::remove_file(&cache_path)?;
         println!("removed {}", cache_path.display());
     } else {

@@ -1,9 +1,9 @@
-use std::{collections::HashMap, ffi::OsString, path::PathBuf};
+use std::{ffi::OsString, path::PathBuf};
 
 use anyhow::Result;
 
 use crate::helpers::{
-    cache::compute_task_hash,
+    cache::{compute_task_hash, TaskCache},
     graph::TaskGraph,
     path::{build_path_var, collect_task_bins, resolve_workspace_bins},
     scripts_def::WorkspaceConfig,
@@ -31,7 +31,7 @@ impl RunPlan {
     pub fn build(
         graph: &TaskGraph,
         git_root: &std::path::Path,
-        cache: &HashMap<String, String>,
+        cache: &TaskCache,
         force: bool,
         append_cmd: Option<&String>,
         workspace_config: Option<&WorkspaceConfig>,
@@ -44,9 +44,9 @@ impl RunPlan {
             } else {
                 node.task.command.clone()
             };
-            let cache_key = format!("{}:{}", node.unit_path.display(), node.task_name);
-            let cache_hash = compute_task_hash(node, command.as_deref())?;
-            let should_run = should_run_task(cache, force, &cache_key, cache_hash.as_ref());
+            let cache_key = task_cache_key(graph, idx, git_root)?;
+            let cache_hash = compute_task_hash(node, command.as_deref(), workspace_config)?;
+            let should_run = should_run_task(cache, force, &cache_key, cache_hash.as_ref())?;
 
             let mut bins = collect_task_bins(graph, idx);
             bins.extend(resolve_workspace_bins(
@@ -74,18 +74,20 @@ impl RunPlan {
 }
 
 fn should_run_task(
-    cache: &HashMap<String, String>,
+    cache: &TaskCache,
     force: bool,
     cache_key: &str,
     cache_hash: Option<&String>,
-) -> bool {
+) -> Result<bool> {
     if force {
-        return true;
+        return Ok(true);
     }
 
     match cache_hash {
-        Some(hash) => cache.get(cache_key).is_none_or(|previous| previous != hash),
-        None => true,
+        Some(hash) => Ok(cache
+            .get(cache_key)?
+            .is_none_or(|previous| previous != *hash)),
+        None => Ok(true),
     }
 }
 
@@ -100,6 +102,17 @@ fn mark_dependents_dirty(entries: &mut [PlanEntry]) {
             entries[idx].should_run = true;
         }
     }
+}
+
+fn task_cache_key(graph: &TaskGraph, idx: usize, git_root: &std::path::Path) -> Result<String> {
+    let node = &graph.scripts[idx];
+    let relative = node.unit_path.strip_prefix(git_root)?;
+    let unit = if relative.as_os_str().is_empty() {
+        ".".into()
+    } else {
+        relative.to_string_lossy()
+    };
+    Ok(format!("{unit}:{}", node.task_name))
 }
 
 fn task_display_name(graph: &TaskGraph, idx: usize, relative_to: &std::path::Path) -> String {

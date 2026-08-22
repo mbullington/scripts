@@ -7,7 +7,11 @@ use std::{
 use thiserror::Error;
 
 use super::{
-    resolve::{parse_dependency, read_scripts, resolve_scripts_path, ResolveScriptsError},
+    git::get_git_root,
+    resolve::{
+        find_enclosing_unit, parse_dependency, parse_target, read_scripts, resolve_scripts_path,
+        ResolveScriptsError,
+    },
     scripts_def::Task,
 };
 
@@ -77,6 +81,27 @@ impl Display for TaggedResolveScriptsError {
 
 fn format_task_ref(unit_path: &Path, task_name: &str) -> String {
     format!("{}:{}", unit_path.display(), task_name)
+}
+
+pub fn build_target_graph(
+    target: &str,
+    working_dir: &Path,
+) -> anyhow::Result<(TaskGraph, PathBuf)> {
+    let (unit, task) = parse_target(target)?;
+    let git_root = get_git_root(working_dir)?.canonicalize()?;
+    let initial_path = if unit == "." {
+        find_enclosing_unit(working_dir, &git_root).map_err(|error| TaggedResolveScriptsError {
+            path: working_dir.to_path_buf(),
+            error,
+        })?
+    } else {
+        resolve_scripts_path(&unit, working_dir).map_err(|error| TaggedResolveScriptsError {
+            path: working_dir.to_path_buf(),
+            error,
+        })?
+    };
+    let graph = build_task_graph(&initial_path, &task)?;
+    Ok((graph, git_root))
 }
 
 pub fn build_task_graph(

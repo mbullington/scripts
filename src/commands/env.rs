@@ -1,28 +1,22 @@
-use std::path::Path;
-
 use anyhow::Result;
 
 use crate::helpers::{
-    git::get_git_root,
-    graph::{build_task_graph, TaskGraph},
+    graph::build_target_graph,
     path::{build_path_var, collect_task_bins, resolve_workspace_bins},
-    resolve::{parse_target, read_workspace_config},
+    resolve::read_workspace_config,
     task_list::print_tasks_for_current_unit,
 };
 
 pub fn cmd_env_command(target: &str) -> Result<()> {
-    let (unit, task_name) = parse_target(target)?;
-    let unit_path = Path::new(&unit);
-
-    let git_root = get_git_root(unit_path)?;
-    let workspace_config = read_workspace_config(&git_root);
-    let graph: TaskGraph = match build_task_graph(unit_path, &task_name) {
-        Ok(graph) => graph,
+    let cwd = std::env::current_dir()?;
+    let (graph, git_root) = match build_target_graph(target, &cwd) {
+        Ok(result) => result,
         Err(error) => {
             print_tasks_for_current_unit();
-            return Err(error.into());
+            return Err(error);
         }
     };
+    let workspace_config = read_workspace_config(&git_root)?;
 
     let root_unit_path = &graph.scripts[graph.root].unit_path;
     let mut bins = collect_task_bins(&graph, graph.root);
@@ -35,7 +29,7 @@ pub fn cmd_env_command(target: &str) -> Result<()> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| String::from("/bin/sh"));
     std::process::Command::new(shell)
         .env("PATH", build_path_var(&bins)?)
-        .env("PS1", format!("({unit}) := "))
+        .env("PS1", format!("({target}) := "))
         .status()?;
     Ok(())
 }

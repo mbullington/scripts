@@ -21,6 +21,8 @@ Each top-level table defines one task directly. For example:
 [build]
 ```
 
+Unknown task keys are errors.
+
 # TASK KEYS
 
 ## deps
@@ -41,7 +43,7 @@ Examples:
 
 Dependency units are resolved by searching upward from the depending unit
 toward the git repository root. The first matching directory which contains a
-*SCRIPTS* file is selected.
+*SCRIPTS* file is selected. Resolved units must remain inside the repository.
 
 ## command
 
@@ -93,6 +95,13 @@ deps = [":build", "packages/api:test"]
 watch = []
 ```
 
+# EXECUTION
+
+Tasks become runnable after all dependencies succeed or are cached. Independent
+runnable tasks execute concurrently, bounded by *scripts run --jobs*. If a task
+fails, its transitive dependents are skipped while independent branches
+continue.
+
 # RESOLUTION
 
 Given a dependency path declared from some unit directory, *scripts*(1)
@@ -104,21 +113,25 @@ checks:
 - and so on until the git repository root
 
 The first candidate directory containing *SCRIPTS* is treated as the dependency
-unit.
+unit. Candidates which resolve outside the git repository are rejected.
 
 # CACHING
 
-The cache key identifies a task by its canonical unit path and task name.
+The cache key identifies a task by its repository-relative unit path and task
+name.
 
 The cached hash for a task with *watch* present is derived from:
 
 - a cache format version
 - the command text
 - dependency, *bin*, and *watch* declarations
+- workspace *bin_append* configuration
 - watched file contents
 
-The repository *.scripts_cache* file is ignored when hashing watched files, so
-broad patterns like *watch = ["."]* do not invalidate themselves.
+The repository *.scripts_cache/* directory is ignored when hashing watched
+files, so broad patterns like *watch = ["."]* do not invalidate themselves.
+Each task owns one atomically replaced cache entry, allowing concurrent
+*scripts*(1) processes to update different tasks safely.
 
 If a watched file is renamed, added, removed, or modified, the task hash
 changes.
