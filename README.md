@@ -5,6 +5,7 @@ A parallel monorepo task runner with content-aware caching and watch mode.
 
 - simple TOML configuration
 - bounded parallel execution of dependency graphs
+- interactive task dashboard with per-task logs
 - content-aware caching
 - watch mode for development workflows
 - no daemon, no remote service, intentionally non-hermetic
@@ -13,11 +14,51 @@ Repository docs include scdoc man page sources under `docs/man/`.
 
 ## Installation
 
+### npm, pnpm, or Yarn
+
+Install the project-local CLI with one of these package managers:
+
+```sh
+npm install --save-dev --save-exact @mbullington/scripts
+npx scripts --version
+
+pnpm add -D -E @mbullington/scripts
+pnpm exec scripts --version
+
+yarn add --dev --exact @mbullington/scripts
+yarn exec scripts --version
+```
+
+The npm launcher requires Node.js 22.15+ or 23.11+. Prebuilt binaries support
+macOS ARM64, macOS x64, Linux x64, and Linux ARM64. The Linux binaries use static
+musl linking and work on both glibc and musl distributions. No Rust toolchain or
+postinstall download is needed. Keep optional dependencies enabled so the package
+manager can install the binary for your operating system and architecture.
+
+Commit `package.json` and your lockfile. In CI, use `npm ci`,
+`pnpm install --frozen-lockfile`, or `yarn install --immutable`, then invoke the
+project-local command. Do not copy `node_modules` between platforms.
+
+Package scripts can call `scripts` directly:
+
+```json
+{
+  "scripts": {
+    "build": "scripts run :build"
+  }
+}
+```
+
+### Cargo
+
 ```sh
 cargo install scripts_runner
 ```
 
-This installs the `scripts` binary.
+This installs the `scripts` binary. Use Cargo to build from source on Unix targets
+without a prebuilt npm package.
+
+For npm release setup, see [Publishing npm packages](docs/npm-releases.md).
 
 > `scripts` currently targets Unix-like environments (macOS and Linux). Tasks are executed through `sh`, so Windows is not supported yet.
 
@@ -103,9 +144,42 @@ Notes:
 - anything after `--` is appended to the root task command and becomes part of the cache key
 - `--watch` starts after the graph finishes, then re-runs the target graph when watched inputs change
 - watch mode updates its watched units when the dependency graph changes
-- `--quiet` suppresses routine task status lines but still streams task output
+- `--interactive` opens a task dashboard on supported terminals; output streams by default
+- `--quiet` suppresses routine task status lines in streaming output
 - `--verbose` shows the working directory and shell command for each task
 - task status lines are written to stderr so stdout stays usable for task output
+
+### Interactive output
+
+Output streams by default. `--interactive` opens a dashboard when stdin,
+stdout, and stderr are terminals and `TERM` is supported. It falls back to
+streaming when a stream is redirected or `TERM` is missing, empty, `dumb`, or
+`unknown`.
+
+```sh
+scripts run --interactive --jobs 4 app:build
+scripts run app:build > build.log
+```
+
+The dashboard keeps tasks in dependency order as their states change. It shows
+pending, running, cached, succeeded, failed, and skipped tasks, with elapsed
+time for executed tasks. Ratatui updates changed terminal cells rather than
+clearing the screen each frame.
+
+- Up, Down, `j`, `k`, or Tab selects a task.
+- Page Up and Page Down scroll its logs. End resumes following new output.
+- Left and Right pan long log lines.
+- Ctrl-C stops the run and its task process groups, then restores the terminal.
+
+The dashboard captures stdout and stderr per task, retaining the last 256 KiB
+and marking truncated logs. Terminal escape sequences are stripped for display.
+`--verbose` includes each command and working directory in its log pane.
+Task stdin is closed in TUI mode. Omit `--interactive` for child commands that need input.
+
+The dashboard closes when the run finishes. A plain-text summary remains on
+stderr, including captured output from failed or interrupted tasks. Successful
+task logs are available only while the dashboard is open. Watch mode opens a
+new dashboard for each run and streams watch notifications between runs.
 
 ### `scripts env <TARGET>`
 

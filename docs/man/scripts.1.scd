@@ -8,7 +8,7 @@ scripts - pragmatic monorepo task runner with content-aware caching
 
 ```
 scripts
-scripts run [--force] [--quiet | --verbose] [--watch] [--jobs n] target [-- args...]
+scripts run [--force] [--quiet | --verbose] [--watch] [--jobs n] [--interactive] target [-- args...]
 scripts env target
 scripts print-tree [--json] [--flat] target
 scripts clean [path]
@@ -36,7 +36,7 @@ from the nearest enclosing unit, if one can be found.
 Run a task and its dependencies.
 
 ```
-scripts run [--force] [--quiet | --verbose] [--watch] [--jobs n] target [-- args...]
+scripts run [--force] [--quiet | --verbose] [--watch] [--jobs n] [--interactive] target [-- args...]
 ```
 
 If arguments are provided after *--*, they are appended to the root task's
@@ -55,6 +55,26 @@ Use *--watch* to run the graph once, then monitor watched units and re-run the
 target graph when changes are detected. Watch mode updates its monitored units
 when the dependency graph changes. It starts after the graph finishes and does
 not supervise long-running processes.
+
+Output streams by default. Use *--interactive* to open a task dashboard when
+stdin, stdout, and stderr are terminals and *TERM* is supported. The flag falls
+back to streaming when any stream is redirected or *TERM* is missing, empty,
+*dumb*, or *unknown*.
+
+The dashboard keeps tasks in dependency order, with states and elapsed times.
+Up, Down, *j*, *k*, and Tab select tasks. Page Up and Page Down scroll logs.
+End resumes following output. Left and Right pan long lines. Ctrl-C stops the
+run and its task process groups and restores the terminal.
+
+Each task log retains the last 256 KiB of stdout and stderr, with terminal
+escape sequences stripped for display. Truncation is marked. *--verbose* adds
+commands and working directories to the log pane. Task stdin is closed in TUI
+mode; omit *--interactive* for child commands that need input.
+
+The dashboard closes at completion and prints a plain-text summary to stderr,
+including captured logs for failed or interrupted tasks. Successful task logs
+are available only while the dashboard is open. In watch mode, each run opens
+a new dashboard; watch notifications stream between runs.
 
 ## env
 
@@ -233,6 +253,10 @@ scripts completions bash > ~/.local/share/bash-completion/completions/scripts
 	Used by *scripts env* to choose which shell to start. If unset,
 	*/bin/sh* is used.
 
+*TERM*
+	Controls terminal support for *scripts run --interactive*. Missing, empty, *dumb*,
+	and *unknown* values select streaming output.
+
 # FILES
 
 *SCRIPTS*
@@ -250,6 +274,8 @@ scripts completions bash > ~/.local/share/bash-completion/completions/scripts
 
 *1* if command-line parsing fails, a target cannot be resolved, a task command
 fails, or a task or workspace configuration file is invalid.
+
+*130* if a TUI run is interrupted.
 
 # NOTES
 

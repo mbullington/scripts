@@ -1,25 +1,18 @@
-use std::{collections::VecDeque, sync::mpsc, thread};
+use std::{collections::VecDeque, time::Duration};
 
 use anyhow::Result;
-use colored::*;
 
-use super::run_plan::{PlanEntry, RunPlan};
+use super::{
+    run_plan::RunPlan,
+    run_process::RunningCommand,
+    run_reporter::{ReportEvent, Reporter, RunInterrupted},
+};
 
 #[derive(Clone, Copy, Debug)]
 pub enum RunOutputMode {
     Normal,
     Quiet,
     Verbose,
-}
-
-impl RunOutputMode {
-    fn shows_status(self, label: &str) -> bool {
-        !matches!(self, Self::Quiet) || label == "FAIL"
-    }
-
-    fn is_verbose(self) -> bool {
-        matches!(self, Self::Verbose)
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -47,10 +40,14 @@ pub enum TaskEvent {
 pub struct ExecutionOutcome {
     pub events: Vec<TaskEvent>,
     pub states: Vec<TaskState>,
+    error: Option<anyhow::Error>,
 }
 
 impl ExecutionOutcome {
     pub fn into_result(self) -> Result<()> {
+        if let Some(error) = self.error {
+            return Err(error);
+        }
         if self
             .states
             .iter()
@@ -63,14 +60,9 @@ impl ExecutionOutcome {
     }
 }
 
-struct CommandCompletion {
-    index: usize,
-    result: std::io::Result<std::process::ExitStatus>,
-}
-
 struct Scheduler<'a> {
     plan: &'a RunPlan,
-    output_mode: RunOutputMode,
+    reporter: Reporter,
     states: Vec<TaskState>,
     events: Vec<TaskEvent>,
     remaining_dependencies: Vec<usize>,
@@ -79,7 +71,7 @@ struct Scheduler<'a> {
 }
 
 impl<'a> Scheduler<'a> {
-    fn new(plan: &'a RunPlan, output_mode: RunOutputMode) -> Self {
+    fn new(plan: &'a RunPlan, reporter: Reporter) -> Self {
         let remaining_dependencies: Vec<usize> = plan
             .entries
             .iter()
@@ -99,7 +91,7 @@ impl<'a> Scheduler<'a> {
 
         Self {
             plan,
-            output_mode,
+            reporter,
             states: vec![TaskState::Pending; plan.entries.len()],
             events: Vec::new(),
             remaining_dependencies,
@@ -117,35 +109,38 @@ impl<'a> Scheduler<'a> {
         None
     }
 
-    fn complete_cached(&mut self, index: usize) {
-        self.states[index] = TaskState::Cached;
-        print_status(
-            self.output_mode,
-            "CACHED",
-            &self.plan.entries[index].name,
-            None,
+    fn set_state(&mut self, index: usize, state: TaskState, detail: Option<&str>) {
+        self.states[index] = state;
+        self.reporter.event(
+            self.plan,
+            ReportEvent::State {
+                index,
+                state,
+                detail,
+            },
         );
+    }
+
+    fn complete_cached(&mut self, index: usize) {
+        self.set_state(index, TaskState::Cached, None);
         self.release_dependents(index);
     }
 
     fn complete_success(&mut self, index: usize) {
         let entry = &self.plan.entries[index];
-        self.states[index] = TaskState::Succeeded;
         self.events.push(TaskEvent::Succeeded {
             cache_key: entry.cache_key.clone(),
             cache_hash: entry.cache_hash.clone(),
         });
-        print_status(self.output_mode, "OK", &entry.name, None);
+        self.set_state(index, TaskState::Succeeded, None);
         self.release_dependents(index);
     }
 
     fn complete_failure(&mut self, index: usize, detail: &str) {
-        let entry = &self.plan.entries[index];
-        self.states[index] = TaskState::Failed;
         self.events.push(TaskEvent::Failed {
-            cache_key: entry.cache_key.clone(),
+            cache_key: self.plan.entries[index].cache_key.clone(),
         });
-        print_status(self.output_mode, "FAIL", &entry.name, Some(detail));
+        self.set_state(index, TaskState::Failed, Some(detail));
         self.skip_dependents(index);
     }
 
@@ -166,140 +161,114 @@ impl<'a> Scheduler<'a> {
             if self.states[dependent] != TaskState::Pending {
                 continue;
             }
-            self.states[dependent] = TaskState::Skipped;
             self.ready.retain(|queued| *queued != dependent);
-            print_status(
-                self.output_mode,
-                "SKIP",
-                &self.plan.entries[dependent].name,
-                Some("(dependency failed)"),
-            );
+            self.set_state(dependent, TaskState::Skipped, Some("(dependency failed)"));
             self.skip_dependents(dependent);
         }
     }
 
-    fn into_outcome(self) -> ExecutionOutcome {
+    fn cancel_pending(&mut self) {
+        self.ready.clear();
+        for index in 0..self.states.len() {
+            if self.states[index] == TaskState::Pending {
+                self.set_state(index, TaskState::Skipped, Some("(run interrupted)"));
+            }
+        }
+    }
+
+    fn into_outcome(mut self, error: Option<anyhow::Error>) -> ExecutionOutcome {
+        self.reporter.finish();
         ExecutionOutcome {
             events: self.events,
             states: self.states,
+            error,
         }
     }
 }
 
-pub fn execute_plan(plan: &RunPlan, output_mode: RunOutputMode, jobs: usize) -> ExecutionOutcome {
+pub fn execute_plan(
+    plan: &RunPlan,
+    output_mode: RunOutputMode,
+    jobs: usize,
+    interactive: bool,
+) -> Result<ExecutionOutcome> {
     assert!(jobs > 0, "executor requires at least one job");
+    let reporter = Reporter::new(plan, output_mode, interactive)?;
+    let capture = reporter.captures_output();
+    let mut scheduler = Scheduler::new(plan, reporter);
+    let mut active: Vec<RunningCommand> = Vec::new();
+    let mut error = None;
 
-    let mut scheduler = Scheduler::new(plan, output_mode);
-    let (completion_tx, completion_rx) = mpsc::channel();
-    let mut active = 0;
-
-    thread::scope(|scope| loop {
-        while active < jobs {
+    loop {
+        match scheduler.reporter.tick(Duration::ZERO) {
+            Ok(true) if error.is_none() => error = Some(RunInterrupted.into()),
+            Err(io_error) if error.is_none() => error = Some(io_error.into()),
+            _ => {}
+        }
+        if error.is_some() {
+            scheduler.cancel_pending();
+            for command in &mut active {
+                command.cancel();
+            }
+        }
+        while error.is_none() && active.len() < jobs {
             let Some(index) = scheduler.next_ready() else {
                 break;
             };
             let entry = &plan.entries[index];
-
             if !entry.should_run {
                 scheduler.complete_cached(index);
                 continue;
             }
-
-            let Some(command) = entry.command.clone() else {
-                print_status(output_mode, "RUN", &entry.name, Some("(no command)"));
+            scheduler.set_state(
+                index,
+                TaskState::Running,
+                entry.command.is_none().then_some("(no command)"),
+            );
+            if entry.command.is_none() {
                 scheduler.complete_success(index);
                 continue;
-            };
+            }
+            match RunningCommand::spawn(entry, capture) {
+                Ok(command) => active.push(command),
+                Err(error) => scheduler
+                    .complete_failure(index, &format!("(failed to start command: {error})")),
+            }
+        }
 
-            print_status(output_mode, "RUN", &entry.name, None);
-            print_verbose_command(output_mode, entry, &command);
-            scheduler.states[index] = TaskState::Running;
-
-            let dir = entry.dir.clone();
-            let path_var = entry.path_var.clone();
-            let completion_tx = completion_tx.clone();
-            let spawn_result = thread::Builder::new().spawn_scoped(scope, move || {
-                use std::process::Stdio;
-
-                let result = std::process::Command::new("sh")
-                    .args(["-c", &command])
-                    .current_dir(dir)
-                    .env("PATH", path_var)
-                    .stdout(Stdio::inherit())
-                    .stderr(Stdio::inherit())
-                    .status();
-                let _ = completion_tx.send(CommandCompletion { index, result });
-            });
-
-            match spawn_result {
-                Ok(_) => active += 1,
-                Err(error) => {
-                    scheduler.complete_failure(index, &format!("(failed to start worker: {error})"))
+        let mut position = 0;
+        while position < active.len() {
+            let index = active[position].index;
+            let result = active[position].poll(plan, &mut scheduler.reporter);
+            let detail = match result {
+                Ok(None) => {
+                    position += 1;
+                    continue;
                 }
-            }
-        }
-
-        if active == 0 {
-            if scheduler.ready.is_empty() {
-                break;
-            }
-            continue;
-        }
-
-        let completion = completion_rx
-            .recv()
-            .expect("worker completion channel closed unexpectedly");
-        active -= 1;
-        match completion.result {
-            Ok(status) if status.success() => scheduler.complete_success(completion.index),
-            Ok(status) => {
-                let detail = match status.code() {
+                Ok(_) if error.is_some() => Some("(run interrupted)".to_string()),
+                Ok(Some(status)) if status.success() => None,
+                Ok(Some(status)) => Some(match status.code() {
                     Some(code) => format!("(exit code: {code})"),
                     None => "(terminated by signal)".to_string(),
-                };
-                scheduler.complete_failure(completion.index, &detail);
+                }),
+                Err(error) => Some(format!("(command I/O failed: {error})")),
+            };
+            active.swap_remove(position);
+            if let Some(detail) = detail {
+                scheduler.complete_failure(index, &detail);
+            } else {
+                scheduler.complete_success(index);
             }
-            Err(error) => scheduler.complete_failure(
-                completion.index,
-                &format!("(failed to start command: {error})"),
-            ),
         }
-    });
-
-    scheduler.into_outcome()
-}
-
-fn status_label(label: &str) -> colored::ColoredString {
-    match label {
-        "RUN" => label.bold().blue(),
-        "OK" => label.bold().green(),
-        "CACHED" => label.bold().bright_black(),
-        "SKIP" => label.bold().yellow(),
-        "FAIL" => label.bold().red(),
-        _ => label.normal(),
+        if active.is_empty() && scheduler.ready.is_empty() {
+            break;
+        }
+        // Poll child pipes without reader threads or an unbounded output queue.
+        match scheduler.reporter.tick(Duration::from_millis(20)) {
+            Ok(true) if error.is_none() => error = Some(RunInterrupted.into()),
+            Err(io_error) if error.is_none() => error = Some(io_error.into()),
+            _ => {}
+        }
     }
-}
-
-fn print_status(output_mode: RunOutputMode, label: &str, name: &str, detail: Option<&str>) {
-    if !output_mode.shows_status(label) {
-        return;
-    }
-
-    let label = status_label(label);
-    match detail {
-        Some(detail) => eprintln!("{label} {name} {detail}"),
-        None => eprintln!("{label} {name}"),
-    }
-}
-
-fn print_verbose_command(output_mode: RunOutputMode, entry: &PlanEntry, command: &str) {
-    if !output_mode.is_verbose() {
-        return;
-    }
-
-    eprintln!("    cwd: {}", entry.dir.display());
-    eprintln!("    cmd:");
-    for line in command.lines() {
-        eprintln!("      {line}");
-    }
+    Ok(scheduler.into_outcome(error))
 }

@@ -38,8 +38,13 @@ Run a task and its dependencies.
 - `--jobs N` sets the concurrency limit. The default is the logical CPU count.
 - A failed task skips its transitive dependents; independent branches continue.
 - `--force` ignores cached results and executes the graph.
-- `--quiet` suppresses routine status lines but preserves task output and failures.
-- `--verbose` prints each task's working directory and shell command.
+- Output streams by default, preserving child stdin. `--interactive` opens a dashboard when all three standard streams are terminals and `TERM` is supported.
+- `--interactive` falls back to streaming for redirected streams or missing, empty, `dumb`, or `unknown` `TERM` values.
+- TUI mode closes child stdin. Omit `--interactive` for child commands that need input.
+- The dashboard keeps tasks in dependency order. Up/Down, j/k, and Tab select tasks; Page Up/Down scroll logs; End follows output; Left/Right pan lines; Ctrl-C stops the run and its task process groups.
+- TUI logs retain the last 256 KiB per task, stripping terminal escapes for display and marking truncation. The dashboard exits at completion and prints a summary with failed or interrupted task logs to stderr.
+- `--quiet` suppresses routine status lines in streaming output but preserves task output and failures.
+- `--verbose` prints each task's working directory and shell command, or adds them to its TUI log.
 - `--watch` reruns the graph when watched inputs change and updates registrations when the graph changes.
 - Text after `--` is appended to the root task's shell command and included in its cache fingerprint.
 

@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Add opt-in `--interactive` output with a stable task dashboard, per-task logs, elapsed times, and terminal cleanup on interruption.
+
 - Run independent tasks concurrently with a bounded in-process DAG executor.
 - Add `--jobs N`, defaulting to the host's logical CPU count.
 - Continue independent branches after failures while skipping transitive dependents.

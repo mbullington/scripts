@@ -987,3 +987,31 @@ watch = ["input", "SCRIPTS"]
         std::panic::resume_unwind(payload);
     }
 }
+
+#[test]
+fn redirected_runs_preserve_separate_streams_without_terminal_controls() {
+    let repo = init_repo();
+    write_file(
+        repo.path(),
+        "SCRIPTS",
+        "[build]\ncommand = \"printf 'task stdout\\n'; printf 'task stderr\\n' >&2\"\n",
+    );
+    for args in [vec!["run", "build"], vec!["run", "build", "--interactive"]] {
+        let output = scripts_command(&repo)
+            .args(&args)
+            .env("TERM", "xterm-256color")
+            .env("CLICOLOR_FORCE", "1")
+            .output()
+            .expect("run redirected task");
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"task stdout\n");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains("RUN :build"));
+        assert!(stderr.contains("task stderr\n"));
+        assert!(stderr.contains("OK :build"));
+        assert!(
+            !stderr.contains('\x1b'),
+            "{args:?} emitted terminal controls"
+        );
+    }
+}

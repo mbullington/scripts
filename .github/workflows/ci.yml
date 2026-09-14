@@ -5,6 +5,9 @@ on:
   pull_request:
 
 jobs:
+  npm-packages:
+    uses: ./.github/workflows/npm-packages.yml
+
   checks:
     name: checks (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

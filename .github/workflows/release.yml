@@ -7,47 +7,14 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-binaries:
-    name: build (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
-
-      - name: Build release binary
-        run: cargo build --locked --release
-
-      - name: Package release artifact
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION="${GITHUB_REF_NAME:-dev}"
-          OS_NAME="$(printf '%s' "$RUNNER_OS" | tr '[:upper:]' '[:lower:]')"
-          TARGET_DIR="dist"
-          mkdir -p "$TARGET_DIR"
-          ARCHIVE="scripts-${VERSION}-${OS_NAME}.tar.gz"
-          tar -C target/release -czf "$TARGET_DIR/$ARCHIVE" scripts
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: scripts-${{ matrix.os }}
-          path: dist/*
+  packages:
+    uses: ./.github/workflows/npm-packages.yml
+    with:
+      release-tag: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
 
   github-release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build-binaries
+    needs: packages
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -56,6 +23,7 @@ jobs:
       - name: Download release artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: scripts-release-*
           path: dist
           merge-multiple: true
 
@@ -65,6 +33,7 @@ jobs:
           files: dist/*
 
   publish-crate:
+    needs: packages
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     env:
@@ -96,3 +65,32 @@ jobs:
       - name: Skip publish when token is missing
         if: env.CARGO_REGISTRY_TOKEN == ''
         run: echo "CARGO_REGISTRY_TOKEN is not configured; skipping cargo publish."
+
+  publish-npm:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: packages
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: npm-publish
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+      - name: Install npm with trusted publishing support
+        run: npm install --global npm@11
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: npm-*
+          path: target/npm/dist
+          merge-multiple: true
+      - name: Publish platform packages, then launcher
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ needs.packages.outputs.version }}
+        run: node npm/publish.mjs "$VERSION" target/npm/dist

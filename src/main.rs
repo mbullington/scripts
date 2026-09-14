@@ -12,9 +12,11 @@ use crate::helpers::task_list::print_tasks_for_current_unit;
 mod commands;
 mod helpers;
 
+use commands::run_reporter::RunInterrupted;
+
 const ROOT_AFTER_HELP: &str = "Examples:\n  scripts run app:build\n  scripts run build\n  scripts run :build --watch\n  scripts print-tree app:test --json\n  scripts env dev\n  scripts completions bash > ~/.local/share/bash-completion/completions/scripts\n\nTarget syntax:\n  <unit>:<task>   Run a specific task in another unit\n  <task>          Run a task in the nearest enclosing unit\n  :<task>         Also run a task in the nearest enclosing unit";
 
-const RUN_AFTER_HELP: &str = "Examples:\n  scripts run app:build\n  scripts run build\n  scripts run :build --watch\n  scripts run dev -- echo done\n  scripts run --jobs 4 app:build\n  scripts run --force tools/pkg:build\n  scripts run --quiet app:build\n  scripts run --verbose app:build";
+const RUN_AFTER_HELP: &str = "Examples:\n  scripts run app:build\n  scripts run build\n  scripts run :build --watch\n  scripts run dev -- echo done\n  scripts run --jobs 4 app:build\n  scripts run --interactive app:build\n  scripts run --force tools/pkg:build\n  scripts run --quiet app:build\n  scripts run --verbose app:build";
 
 const ENV_AFTER_HELP: &str = "Examples:\n  scripts env app:dev\n  scripts env dev";
 
@@ -65,6 +67,9 @@ struct RunArgs {
     /// Maximum number of tasks to run concurrently. Defaults to the logical CPU count.
     #[arg(short = 'j', long, value_name = "N")]
     jobs: Option<NonZeroUsize>,
+    /// Show an interactive task dashboard on supported terminals. Otherwise, stream output.
+    #[arg(long)]
+    interactive: bool,
     /// Append an inline shell fragment to the root task after `--`.
     #[arg(trailing_var_arg = true, value_name = "ARGS")]
     args: Vec<String>,
@@ -123,22 +128,7 @@ fn main() {
 
     let cli = Cli::parse();
     let result = match cli {
-        Cli::Run(args) => {
-            let appended = if args.args.is_empty() {
-                None
-            } else {
-                Some(args.args.join(" "))
-            };
-            cmd_run_command(
-                &args.target,
-                args.force,
-                args.quiet,
-                args.verbose,
-                args.watch,
-                args.jobs,
-                appended,
-            )
-        }
+        Cli::Run(args) => cmd_run_command(args),
         Cli::Clean(args) => cmd_clean_command(&args.target),
         Cli::Env(args) => cmd_env_command(&args.target),
         Cli::PrintTree(args) => cmd_print_tree_command(&args.target, args.json, args.flat),
@@ -150,6 +140,6 @@ fn main() {
     };
     if let Err(e) = result {
         eprintln!("error: {e:#}");
-        std::process::exit(1);
+        std::process::exit(if e.is::<RunInterrupted>() { 130 } else { 1 });
     }
 }

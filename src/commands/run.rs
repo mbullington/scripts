@@ -22,6 +22,7 @@ use crate::helpers::{
 use super::{
     run_executor::{execute_plan, RunOutputMode, TaskEvent},
     run_plan::RunPlan,
+    run_reporter::RunInterrupted,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -96,6 +97,7 @@ fn run_once(
     output_mode: RunOutputMode,
     jobs: usize,
     append_cmd: &Option<String>,
+    interactive: bool,
 ) -> Result<RunOnceResult> {
     let cwd = std::env::current_dir()?;
     let (graph, git_root) = match build_target_graph(target, &cwd) {
@@ -116,7 +118,7 @@ fn run_once(
         append_cmd.as_ref(),
         workspace_config.as_ref(),
     )?;
-    let outcome = execute_plan(&plan, output_mode, jobs);
+    let outcome = execute_plan(&plan, output_mode, jobs, interactive)?;
 
     apply_cache_events(&cache, &outcome.events)?;
 
@@ -171,14 +173,13 @@ fn watch_target_graph(
     output_mode: RunOutputMode,
     jobs: usize,
     append_cmd: &Option<String>,
+    interactive: bool,
     watch_paths: HashMap<PathBuf, WatchDepth>,
 ) -> Result<()> {
     if watch_paths.is_empty() {
         eprintln!("watch mode requested, but no watched tasks were found in the target graph");
         return Ok(());
     }
-
-    eprintln!("watching for changes... (Ctrl+C to exit)");
 
     let cwd = std::env::current_dir()?;
     let (_, git_root) = build_target_graph(target, &cwd)?;
@@ -193,6 +194,7 @@ fn watch_target_graph(
 
     let mut watched_paths = HashMap::new();
     reconcile_watch_paths(debouncer.watcher(), &mut watched_paths, watch_paths)?;
+    eprintln!("watching for changes... (Ctrl+C to exit)");
 
     loop {
         match rx.recv() {
@@ -205,7 +207,7 @@ fn watch_target_graph(
                 }
 
                 eprintln!("change detected; re-running target graph");
-                match run_once(target, false, output_mode, jobs, append_cmd) {
+                match run_once(target, false, output_mode, jobs, append_cmd, interactive) {
                     Ok(result) => {
                         reconcile_watch_paths(
                             debouncer.watcher(),
@@ -213,6 +215,9 @@ fn watch_target_graph(
                             result.watch_paths,
                         )?;
                         if let Some(error) = result.execution_error {
+                            if error.is::<RunInterrupted>() {
+                                return Err(error);
+                            }
                             eprintln!("watch re-run failed: {error}");
                         }
                         if watched_paths.is_empty() {
@@ -236,29 +241,35 @@ fn watch_target_graph(
     Ok(())
 }
 
-pub fn cmd_run_command(
-    target: &str,
-    force: bool,
-    quiet: bool,
-    verbose: bool,
-    watch: bool,
-    jobs: Option<NonZeroUsize>,
-    append_cmd: Option<String>,
-) -> Result<()> {
-    let output_mode = output_mode(quiet, verbose);
-    let jobs = jobs.map(NonZeroUsize::get).unwrap_or_else(|| {
+pub fn cmd_run_command(args: crate::RunArgs) -> Result<()> {
+    let output_mode = output_mode(args.quiet, args.verbose);
+    let jobs = args.jobs.map(NonZeroUsize::get).unwrap_or_else(|| {
         std::thread::available_parallelism()
             .map(NonZeroUsize::get)
             .unwrap_or(1)
     });
-
-    let initial = run_once(target, force, output_mode, jobs, &append_cmd)?;
+    let append_cmd = (!args.args.is_empty()).then(|| args.args.join(" "));
+    let initial = run_once(
+        &args.target,
+        args.force,
+        output_mode,
+        jobs,
+        &append_cmd,
+        args.interactive,
+    )?;
     if let Some(error) = initial.execution_error {
         return Err(error);
     }
-    if !watch {
+    if !args.watch {
         return Ok(());
     }
 
-    watch_target_graph(target, output_mode, jobs, &append_cmd, initial.watch_paths)
+    watch_target_graph(
+        &args.target,
+        output_mode,
+        jobs,
+        &append_cmd,
+        args.interactive,
+        initial.watch_paths,
+    )
 }

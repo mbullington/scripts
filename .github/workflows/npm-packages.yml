@@ -1,0 +1,124 @@
+name: npm packages
+
+on:
+  workflow_call:
+    inputs:
+      release-tag:
+        type: string
+        default: ''
+    outputs:
+      version:
+        value: ${{ jobs.prepare.outputs.version }}
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.metadata.outputs.matrix }}
+      version: ${{ steps.metadata.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate release version and select targets
+        id: metadata
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+        run: |
+          set -euo pipefail
+          METADATA="$(python3 npm/package.py --tag "$RELEASE_TAG" matrix)"
+          echo "matrix=$(jq -c .matrix <<< "$METADATA")" >> "$GITHUB_OUTPUT"
+          echo "version=$(jq -r .version <<< "$METADATA")" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    name: pack (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Install musl compiler
+        if: matrix.os == 'linux'
+        run: sudo apt-get update && sudo apt-get install --yes musl-tools
+      - name: Build native binary
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+        run: cargo build --locked --release --target ${{ matrix.target }}
+      - name: Test launcher and publisher contracts
+        run: node --test npm/*.test.cjs
+      - name: Pack npm packages
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+        run: python3 npm/package.py --tag "$RELEASE_TAG" pack ${{ matrix.platform }} target/${{ matrix.target }}/release/scripts
+      - name: Upload platform package
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-${{ matrix.platform }}
+          path: target/npm/dist/mbullington-scripts-${{ matrix.platform }}-*.tgz
+          if-no-files-found: error
+      - name: Upload launcher package
+        if: matrix.platform == 'linux-x64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-launcher
+          path: target/npm/dist/mbullington-scripts-${{ needs.prepare.outputs.version }}.tgz
+          if-no-files-found: error
+      - name: Pack GitHub release archive
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          mkdir -p target/release-assets
+          tar -C target/${{ matrix.target }}/release -czf "target/release-assets/scripts-v${VERSION}-${{ matrix.platform }}.tar.gz" scripts
+      - name: Upload release archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: scripts-release-${{ matrix.platform }}
+          path: target/release-assets/*.tar.gz
+          if-no-files-found: error
+
+  install:
+    needs: [prepare, build]
+    name: install (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.15.0'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: npm-*
+          path: target/npm/dist
+          merge-multiple: true
+      - name: Install package managers
+        run: npm install --global pnpm@10.34.5 @yarnpkg/cli-dist@4.18.0
+      - name: Test launcher and publisher on minimum Node version
+        run: node --test npm/*.test.cjs
+      - name: Test npm installation
+        run: node npm/smoke.mjs npm target/npm/dist
+      - name: Test pnpm installation
+        run: node npm/smoke.mjs pnpm target/npm/dist
+      - name: Test Yarn PnP installation
+        run: node npm/smoke.mjs yarn target/npm/dist
